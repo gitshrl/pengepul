@@ -18,7 +18,7 @@ from .utils import generate_pkce_codes
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="pengepul")
-    parser.add_argument("--config", default="config.yaml", help="path to config YAML")
+    parser.add_argument("--config", help="path to config YAML")
     parser.add_argument("--login", action="store_true", help="authorize an upstream account")
     parser.add_argument(
         "--provider",

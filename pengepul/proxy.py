@@ -46,8 +46,7 @@ async def proxy_with_retry(
             detail: dict[str, Any] = {
                 "error": {
                     "message": (
-                        f"no available {manager.provider} account; "
-                        f"run login for {manager.provider}"
+                        f"no available {manager.provider} account; run login for {manager.provider}"
                     ),
                     "type": "no_account_for_provider",
                     "provider": manager.provider,

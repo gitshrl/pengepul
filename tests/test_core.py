@@ -3,14 +3,16 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import stat
 from collections.abc import AsyncIterator
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from fastapi.testclient import TestClient
+from pytest import MonkeyPatch
 
 from pengepul.app import create_app
-from pengepul.config import Config
+from pengepul.config import Config, load_config
 from pengepul.oauth import (
     CODEX_CALLBACK_PATH,
     CODEX_CALLBACK_PORT,
@@ -80,6 +82,35 @@ def test_token_storage_round_trips_provider_files(tmp_path: Path) -> None:
         "alice@example.com"
     ]
     assert [token.email for token in load_all_tokens(str(tmp_path), "codex")] == ["bob@example.com"]
+
+
+def test_default_config_is_generated_under_home_pengepul(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(workspace)
+
+    config = load_config()
+
+    config_path = tmp_path / ".pengepul" / "config.yaml"
+    assert config_path.exists()
+    assert not (workspace / "config.yaml").exists()
+    assert config.auth_dir == str(tmp_path / ".pengepul")
+    assert stat.S_IMODE(config_path.parent.stat().st_mode) == 0o700
+    assert stat.S_IMODE(config_path.stat().st_mode) == 0o600
+
+
+def test_explicit_config_path_is_respected(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    config_path = tmp_path / "custom.yaml"
+
+    config = load_config(str(config_path))
+
+    assert config_path.exists()
+    assert not (tmp_path / "home" / ".pengepul" / "config.yaml").exists()
+    assert config.auth_dir == str(tmp_path / "home" / ".pengepul")
 
 
 def test_oauth_urls_use_expected_callback_and_scope() -> None:

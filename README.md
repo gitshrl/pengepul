@@ -21,15 +21,15 @@ uv sync --extra dev
 Authorize at least one account before serving traffic.
 
 ```bash
-uv run pengepul --login --provider anthropic
-uv run pengepul --login --provider codex
+.venv/bin/pengepul --login --provider anthropic
+.venv/bin/pengepul --login --provider codex
 ```
 
 Use manual mode when the browser callback cannot reach localhost:
 
 ```bash
-uv run pengepul --login --provider anthropic --manual
-uv run pengepul --login --provider codex --manual
+.venv/bin/pengepul --login --provider anthropic --manual
+.venv/bin/pengepul --login --provider codex --manual
 ```
 
 Tokens are stored under `~/.pengepul` by default.
@@ -37,10 +37,10 @@ Tokens are stored under `~/.pengepul` by default.
 ## Run
 
 ```bash
-uv run pengepul --config config.yaml
+.venv/bin/pengepul
 ```
 
-If `config.yaml` does not exist, pengepul creates one with a generated API key.
+If `~/.pengepul/config.yaml` does not exist, pengepul creates one with a generated API key.
 
 ```yaml
 host: ""
@@ -57,6 +57,8 @@ stats:
   enabled: true
 debug: off
 ```
+
+Use `--config /path/to/config.yaml` only when you intentionally want a custom config path.
 
 ## Routes
 
@@ -88,8 +90,8 @@ x-api-key: sk-local-example
 ## Verify
 
 ```bash
-uv run --no-sync ruff check .
-uv run --no-sync ruff format --check .
-uv run --no-sync python -m compileall pengepul tests
-uv run --no-sync python -m pytest -q
+.venv/bin/ruff check .
+.venv/bin/ruff format --check .
+.venv/bin/python -m compileall pengepul tests
+.venv/bin/python -m pytest -q
 ```
