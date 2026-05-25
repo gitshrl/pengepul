@@ -64,6 +64,10 @@ def default_config_path() -> Path:
     return Path.home() / ".pengepul" / "config.yaml"
 
 
+def legacy_config_path() -> Path:
+    return Path.cwd() / "config.yaml"
+
+
 def normalize_debug(value: object) -> DebugMode:
     if value is True:
         return "errors"
@@ -88,8 +92,34 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
     return out
 
 
+def _config_paths(config_path: str | None) -> tuple[Path, Path]:
+    if config_path is not None:
+        path = Path(config_path).expanduser()
+        return path, path
+
+    path = default_config_path()
+    if path.exists():
+        return path, path
+
+    legacy_path = legacy_config_path()
+    if legacy_path.exists():
+        return legacy_path, path
+
+    return path, path
+
+
+def _write_config(path: Path, raw: dict[str, Any], private_parent: bool) -> None:
+    if private_parent:
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(path.parent, 0o700)
+    elif path.parent != Path("."):
+        path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+    os.chmod(path, 0o600)
+
+
 def load_config(config_path: str | None = None) -> Config:
-    path = Path(config_path).expanduser() if config_path else default_config_path()
+    path, write_path = _config_paths(config_path)
     if path.exists():
         parsed = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         if not isinstance(parsed, dict):
@@ -102,14 +132,10 @@ def load_config(config_path: str | None = None) -> Config:
     if not keys:
         keys = [generate_api_key()]
         raw["api-keys"] = keys
-        if config_path is None:
-            path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-            os.chmod(path.parent, 0o700)
-        elif str(path.parent) != ".":
-            path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
-        os.chmod(path, 0o600)
-        print(f"\ngenerated API key and saved it to {path}:\n\n  {keys[0]}\n")
+        _write_config(write_path, raw, private_parent=config_path is None)
+        print(f"\ngenerated API key and saved it to {write_path}:\n\n  {keys[0]}\n")
+    elif write_path != path:
+        _write_config(write_path, raw, private_parent=True)
 
     cloaking = raw.get("cloaking") or {}
     timeouts = raw.get("timeouts") or {}

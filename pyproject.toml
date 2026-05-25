@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "pengepul"
 version = "0.1.0"
-description = "Local OAuth-to-API relay for Claude and Codex accounts"
+description = "OAuth-to-API relay for Claude and Codex accounts"
 requires-python = ">=3.10"
 dependencies = [
   "fastapi>=0.110",
@@ -36,4 +36,3 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
-
