@@ -523,7 +523,7 @@ def _response_payload_from_drain(drain, model: str) -> dict[str, Any]:
     if drain.completed_response:
         payload = dict(drain.completed_response)
         if not payload.get("output"):
-            payload["output"] = drain.output_items or _output_from_drain(drain)
+            payload["output"] = _output_from_drain(drain)
         return payload
     return {
         "id": f"resp_{int(time.time() * 1000)}",
@@ -531,13 +531,13 @@ def _response_payload_from_drain(drain, model: str) -> dict[str, Any]:
         "created_at": int(time.time()),
         "status": drain.status,
         "model": model,
-        "output": drain.output_items or _output_from_drain(drain),
+        "output": _output_from_drain(drain),
         "usage": drain.usage,
     }
 
 
 def _output_from_drain(drain) -> list[dict[str, Any]]:
-    output: list[dict[str, Any]] = []
+    output: list[dict[str, Any]] = list(drain.output_items)
     if drain.reasoning_out:
         output.append(
             {

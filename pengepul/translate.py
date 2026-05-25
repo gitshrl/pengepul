@@ -13,6 +13,11 @@ MODEL_ALIASES = {
     "sonnet": "claude-sonnet-4-6",
     "haiku": "claude-haiku-4-5-20251001",
 }
+ANTHROPIC_WEB_SEARCH_TOOL_TYPE = "web_search_20250305"
+ANTHROPIC_WEB_SEARCH_TOOL_TYPES = {
+    "web_search_20250305",
+    "web_search_20260209",
+}
 
 
 def resolve_model(model: str | None) -> str:
@@ -129,6 +134,230 @@ def _anthropic_system_from_messages(messages: list[dict[str, Any]]) -> list[dict
     return system
 
 
+def _anthropic_web_search_tool(tool: dict[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {
+        "type": tool.get("type")
+        if tool.get("type") in ANTHROPIC_WEB_SEARCH_TOOL_TYPES
+        else ANTHROPIC_WEB_SEARCH_TOOL_TYPE,
+        "name": tool.get("name") or "web_search",
+    }
+    if "max_uses" in tool:
+        out["max_uses"] = tool["max_uses"]
+    filters = tool.get("filters") or {}
+    allowed_domains = tool.get("allowed_domains") or filters.get("allowed_domains")
+    blocked_domains = tool.get("blocked_domains") or filters.get("blocked_domains")
+    if allowed_domains:
+        out["allowed_domains"] = allowed_domains
+    if blocked_domains:
+        out["blocked_domains"] = blocked_domains
+    if tool.get("user_location"):
+        out["user_location"] = tool["user_location"]
+    return out
+
+
+def _openai_tool_to_anthropic(tool: Any) -> dict[str, Any] | None:
+    if not isinstance(tool, dict):
+        return None
+    tool_type = tool.get("type")
+    if tool_type in ("web_search", "web_search_preview", *ANTHROPIC_WEB_SEARCH_TOOL_TYPES):
+        return _anthropic_web_search_tool(tool)
+    if tool_type == "function" and tool.get("name"):
+        return {
+            "name": tool.get("name"),
+            "description": tool.get("description", ""),
+            "input_schema": tool.get("parameters") or {"type": "object"},
+        }
+    function = tool.get("function")
+    if not isinstance(function, dict):
+        return None
+    return {
+        "name": function.get("name"),
+        "description": function.get("description", ""),
+        "input_schema": function.get("parameters") or {"type": "object"},
+    }
+
+
+def _responses_tool_from_chat_tool(tool: Any) -> dict[str, Any] | None:
+    if not isinstance(tool, dict):
+        return None
+    tool_type = tool.get("type")
+    if tool_type and tool_type != "function":
+        return dict(tool)
+    fn = tool.get("function") or {}
+    if not isinstance(fn, dict) or not fn.get("name"):
+        return None
+    out = {
+        "type": "function",
+        "name": fn.get("name"),
+        "description": fn.get("description", ""),
+        "parameters": fn.get("parameters") or {"type": "object"},
+    }
+    if "strict" in fn:
+        out["strict"] = fn["strict"]
+    return out
+
+
+def _anthropic_tool_to_responses(tool: dict[str, Any]) -> dict[str, Any]:
+    if tool.get("type") in ANTHROPIC_WEB_SEARCH_TOOL_TYPES:
+        out: dict[str, Any] = {"type": "web_search"}
+        filters: dict[str, Any] = {}
+        if tool.get("allowed_domains"):
+            filters["allowed_domains"] = tool["allowed_domains"]
+        if tool.get("blocked_domains"):
+            filters["blocked_domains"] = tool["blocked_domains"]
+        if filters:
+            out["filters"] = filters
+        if tool.get("user_location"):
+            out["user_location"] = tool["user_location"]
+        return out
+    return {
+        "type": "function",
+        "name": tool.get("name"),
+        "description": tool.get("description", ""),
+        "parameters": tool.get("input_schema") or {"type": "object"},
+    }
+
+
+def _anthropic_tool_choice(body: dict[str, Any], has_tools: bool) -> dict[str, Any] | None:
+    if not has_tools:
+        return None
+    if "tool_choice" not in body and body.get("parallel_tool_calls") is not False:
+        return None
+    choice = body.get("tool_choice", "auto")
+    out: dict[str, Any] | None = None
+    if choice == "auto":
+        out = {"type": "auto"}
+    elif choice == "required":
+        out = {"type": "any"}
+    elif choice == "none":
+        out = {"type": "none"}
+    elif isinstance(choice, dict):
+        choice_type = choice.get("type")
+        if choice_type in ("web_search", "web_search_preview"):
+            out = {"type": "tool", "name": "web_search"}
+        elif choice_type == "function":
+            function = choice.get("function") or {}
+            out = {"type": "tool", "name": choice.get("name") or function.get("name")}
+        elif choice_type in ("auto", "any", "none", "tool"):
+            out = dict(choice)
+    if out is None:
+        out = {"type": "auto"}
+    if body.get("parallel_tool_calls") is False:
+        out["disable_parallel_tool_use"] = True
+    return out
+
+
+def _responses_tool_choice_from_chat(choice: Any) -> Any:
+    if not isinstance(choice, dict):
+        return choice
+    if choice.get("type") == "function":
+        function = choice.get("function") or {}
+        return {"type": "function", "name": choice.get("name") or function.get("name")}
+    return choice
+
+
+def _responses_tool_choice_from_anthropic(choice: Any) -> Any:
+    if not isinstance(choice, dict):
+        return choice
+    choice_type = choice.get("type")
+    if choice_type == "auto":
+        return "auto"
+    if choice_type == "any":
+        return "required"
+    if choice_type == "none":
+        return "none"
+    if choice_type == "tool":
+        name = choice.get("name")
+        if name == "web_search":
+            return {"type": "web_search"}
+        return {"type": "function", "name": name}
+    return choice
+
+
+def _anthropic_citations_to_openai(citations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    annotations: list[dict[str, Any]] = []
+    for citation in citations:
+        if citation.get("type") != "web_search_result_location":
+            continue
+        annotation = {
+            "type": "url_citation",
+            "url": citation.get("url"),
+            "title": citation.get("title"),
+        }
+        if "start_index" in citation:
+            annotation["start_index"] = citation["start_index"]
+        if "end_index" in citation:
+            annotation["end_index"] = citation["end_index"]
+        annotations.append(annotation)
+    return annotations
+
+
+def _openai_annotations_to_anthropic(annotations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    citations: list[dict[str, Any]] = []
+    for annotation in annotations:
+        if annotation.get("type") != "url_citation":
+            continue
+        citation = {
+            "type": "web_search_result_location",
+            "url": annotation.get("url"),
+            "title": annotation.get("title"),
+        }
+        if "start_index" in annotation:
+            citation["start_index"] = annotation["start_index"]
+        if "end_index" in annotation:
+            citation["end_index"] = annotation["end_index"]
+        citations.append(citation)
+    return citations
+
+
+def web_search_query_from_action(action: dict[str, Any]) -> str:
+    query = action.get("query")
+    if isinstance(query, str):
+        return query
+    queries = action.get("queries")
+    if isinstance(queries, list):
+        return "\n".join(str(item) for item in queries if item)
+    return ""
+
+
+def _responses_input_to_openai_messages(input_items: Any) -> list[dict[str, Any]]:
+    if isinstance(input_items, str):
+        return [{"role": "user", "content": input_items}]
+    messages: list[dict[str, Any]] = []
+    for item in input_items or []:
+        if not isinstance(item, dict):
+            messages.append({"role": "user", "content": str(item)})
+            continue
+        item_type = item.get("type")
+        if item.get("role"):
+            messages.append(item)
+        elif item_type == "function_call":
+            messages.append(
+                {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "id": item.get("call_id"),
+                            "type": "function",
+                            "function": {
+                                "name": item.get("name"),
+                                "arguments": item.get("arguments") or "{}",
+                            },
+                        }
+                    ],
+                }
+            )
+        elif item_type == "function_call_output":
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": item.get("call_id"),
+                    "content": item.get("output") or "",
+                }
+            )
+    return messages
+
+
 def openai_to_anthropic(body: dict[str, Any]) -> dict[str, Any]:
     messages = body.get("messages") or []
     result: dict[str, Any] = {
@@ -199,33 +428,19 @@ def openai_to_anthropic(body: dict[str, Any]) -> dict[str, Any]:
     if thinking:
         result["thinking"] = thinking
 
-    if body.get("tools"):
+    available_tools = list(body.get("tools") or []) + list(body.get("responses_tools") or [])
+    if available_tools:
         tools = []
-        for tool in body["tools"]:
-            function = tool.get("function") if isinstance(tool, dict) else None
-            if not function:
-                continue
-            tools.append(
-                {
-                    "name": function.get("name"),
-                    "description": function.get("description", ""),
-                    "input_schema": function.get("parameters") or {"type": "object"},
-                }
-            )
+        for tool in available_tools:
+            translated_tool = _openai_tool_to_anthropic(tool)
+            if translated_tool:
+                tools.append(translated_tool)
         if tools:
             result["tools"] = tools
 
-    if "tool_choice" in body:
-        choice = body["tool_choice"]
-        if choice == "auto":
-            result["tool_choice"] = {"type": "auto"}
-        elif choice == "required":
-            result["tool_choice"] = {"type": "any"}
-        elif isinstance(choice, dict):
-            function = choice.get("function") or {}
-            result["tool_choice"] = {"type": "tool", "name": function.get("name")}
-        if body.get("parallel_tool_calls") is False:
-            result.setdefault("tool_choice", {"type": "auto"})["disable_parallel_tool_use"] = True
+    tool_choice = _anthropic_tool_choice(body, bool(result.get("tools")))
+    if tool_choice:
+        result["tool_choice"] = tool_choice
 
     response_format = body.get("response_format") or {}
     if response_format.get("type") == "json_schema":
@@ -307,15 +522,17 @@ def anthropic_to_openai(payload: dict[str, Any], model: str) -> dict[str, Any]:
 
 def responses_to_anthropic(body: dict[str, Any]) -> dict[str, Any]:
     input_items = body.get("input", body.get("messages") or [])
-    if isinstance(input_items, str):
-        input_items = [{"role": "user", "content": input_items}]
+    messages = _responses_input_to_openai_messages(input_items)
     pseudo_chat = {
         "model": body.get("model"),
-        "messages": input_items,
+        "messages": messages,
         "stream": body.get("stream", False),
         "temperature": body.get("temperature"),
         "top_p": body.get("top_p"),
         "max_completion_tokens": body.get("max_output_tokens"),
+        "tools": body.get("tools"),
+        "tool_choice": body.get("tool_choice"),
+        "parallel_tool_calls": body.get("parallel_tool_calls"),
     }
     result = openai_to_anthropic({k: v for k, v in pseudo_chat.items() if v is not None})
     if body.get("instructions"):
@@ -333,8 +550,28 @@ def responses_to_anthropic(body: dict[str, Any]) -> dict[str, Any]:
 def anthropic_to_responses(payload: dict[str, Any], model: str) -> dict[str, Any]:
     output: list[dict[str, Any]] = []
     text = ""
+    annotations: list[dict[str, Any]] = []
+
+    def flush_text() -> None:
+        nonlocal text, annotations
+        if not text:
+            return
+        content: dict[str, Any] = {"type": "output_text", "text": text}
+        if annotations:
+            content["annotations"] = annotations
+        output.append(
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [content],
+            }
+        )
+        text = ""
+        annotations = []
+
     for block in payload.get("content") or []:
         if block.get("type") == "thinking":
+            flush_text()
             output.append(
                 {
                     "type": "reasoning",
@@ -343,7 +580,9 @@ def anthropic_to_responses(payload: dict[str, Any], model: str) -> dict[str, Any
             )
         elif block.get("type") == "text":
             text += block.get("text", "")
+            annotations.extend(_anthropic_citations_to_openai(block.get("citations") or []))
         elif block.get("type") == "tool_use":
+            flush_text()
             output.append(
                 {
                     "type": "function_call",
@@ -352,14 +591,20 @@ def anthropic_to_responses(payload: dict[str, Any], model: str) -> dict[str, Any
                     "arguments": json.dumps(block.get("input") or {}),
                 }
             )
-    if text:
-        output.append(
-            {
-                "type": "message",
-                "role": "assistant",
-                "content": [{"type": "output_text", "text": text}],
-            }
-        )
+        elif block.get("type") == "server_tool_use" and block.get("name") == "web_search":
+            flush_text()
+            output.append(
+                {
+                    "type": "web_search_call",
+                    "id": block.get("id"),
+                    "status": "completed",
+                    "action": {
+                        "type": "search",
+                        "query": (block.get("input") or {}).get("query", ""),
+                    },
+                }
+            )
+    flush_text()
     usage = payload.get("usage") or {}
     input_tokens = int(usage.get("input_tokens") or 0)
     output_tokens = int(usage.get("output_tokens") or 0)
@@ -435,19 +680,22 @@ def chat_to_responses_request(body: dict[str, Any]) -> dict[str, Any]:
         out["max_output_tokens"] = body.get("max_completion_tokens") or body.get("max_tokens")
     if body.get("reasoning_effort"):
         out["reasoning"] = {"effort": body["reasoning_effort"]}
-    if body.get("tools"):
-        tools = []
-        for tool in body["tools"]:
-            fn = tool.get("function") or {}
-            tools.append(
-                {
-                    "type": "function",
-                    "name": fn.get("name"),
-                    "description": fn.get("description", ""),
-                    "parameters": fn.get("parameters") or {"type": "object"},
-                }
-            )
-        out["tools"] = tools
+    response_tools = []
+    for tool in body.get("tools") or []:
+        translated_tool = _responses_tool_from_chat_tool(tool)
+        if translated_tool:
+            response_tools.append(translated_tool)
+    for tool in body.get("responses_tools") or []:
+        if isinstance(tool, dict):
+            response_tools.append(dict(tool))
+    if response_tools:
+        out["tools"] = response_tools
+    if "responses_tool_choice" in body:
+        out["tool_choice"] = body["responses_tool_choice"]
+    elif "tool_choice" in body:
+        out["tool_choice"] = _responses_tool_choice_from_chat(body["tool_choice"])
+    if "parallel_tool_calls" in body:
+        out["parallel_tool_calls"] = body["parallel_tool_calls"]
     response_format = body.get("response_format") or {}
     if response_format.get("type") == "json_schema":
         schema = response_format.get("json_schema") or {}
@@ -523,15 +771,9 @@ def anthropic_to_responses_request(body: dict[str, Any]) -> dict[str, Any]:
             out["input"].append({"role": role, "content": content or ""})
 
     if body.get("tools"):
-        out["tools"] = [
-            {
-                "type": "function",
-                "name": tool.get("name"),
-                "description": tool.get("description", ""),
-                "parameters": tool.get("input_schema") or {"type": "object"},
-            }
-            for tool in body["tools"]
-        ]
+        out["tools"] = [_anthropic_tool_to_responses(tool) for tool in body["tools"]]
+    if "tool_choice" in body:
+        out["tool_choice"] = _responses_tool_choice_from_anthropic(body["tool_choice"])
     return out
 
 
@@ -599,13 +841,19 @@ def responses_to_anthropic_message(payload: dict[str, Any], model: str) -> dict[
             if text:
                 content.append({"type": "thinking", "thinking": text})
         elif item.get("type") == "message":
-            text = "".join(
-                block.get("text", "")
-                for block in item.get("content") or []
-                if block.get("type") in ("output_text", "text")
-            )
+            text = ""
+            citations: list[dict[str, Any]] = []
+            for block in item.get("content") or []:
+                if block.get("type") in ("output_text", "text"):
+                    text += block.get("text", "")
+                    citations.extend(
+                        _openai_annotations_to_anthropic(block.get("annotations") or [])
+                    )
             if text:
-                content.append({"type": "text", "text": text})
+                text_block: dict[str, Any] = {"type": "text", "text": text}
+                if citations:
+                    text_block["citations"] = citations
+                content.append(text_block)
         elif item.get("type") == "function_call":
             args = item.get("arguments") or "{}"
             try:
@@ -618,6 +866,16 @@ def responses_to_anthropic_message(payload: dict[str, Any], model: str) -> dict[
                     "id": item.get("call_id"),
                     "name": item.get("name"),
                     "input": parsed,
+                }
+            )
+        elif item.get("type") == "web_search_call":
+            action = item.get("action") or {}
+            content.append(
+                {
+                    "type": "server_tool_use",
+                    "id": item.get("id"),
+                    "name": "web_search",
+                    "input": {"query": web_search_query_from_action(action)},
                 }
             )
     usage = payload.get("usage") or {}
@@ -659,8 +917,39 @@ def update_drain_from_response_event(
         drain.reasoning_out += data.get("delta") or ""
     elif event == "response.output_item.done":
         item = data.get("item") or {}
-        if item:
+        if not item:
+            return
+        item_type = item.get("type")
+        if item_type == "function_call":
+            key = str(item.get("id") or data.get("output_index"))
+            drain.tool_calls[key] = {
+                "id": str(item.get("call_id") or item.get("id") or ""),
+                "name": str(item.get("name") or ""),
+                "args": str(item.get("arguments") or ""),
+            }
+        elif item_type not in ("message", "reasoning"):
             drain.output_items.append(item)
+    elif event == "response.output_item.added":
+        item = data.get("item") or {}
+        if item.get("type") == "function_call":
+            key = str(item.get("id") or data.get("output_index"))
+            drain.tool_calls[key] = {
+                "id": str(item.get("call_id") or item.get("id") or ""),
+                "name": str(item.get("name") or ""),
+                "args": str(item.get("arguments") or ""),
+            }
+    elif event == "response.function_call_arguments.delta":
+        key = str(data.get("item_id") or data.get("output_index"))
+        call = drain.tool_calls.setdefault(key, {"id": "", "name": "", "args": ""})
+        call["args"] = f"{call.get('args', '')}{data.get('delta') or ''}"
+    elif event == "response.function_call_arguments.done":
+        item = data.get("item") or data
+        key = str(item.get("id") or data.get("item_id") or data.get("output_index"))
+        drain.tool_calls[key] = {
+            "id": str(item.get("call_id") or item.get("id") or ""),
+            "name": str(item.get("name") or ""),
+            "args": str(item.get("arguments") or ""),
+        }
     elif event == "response.completed":
         response = data.get("response") or data
         drain.completed_response = response
