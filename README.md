@@ -13,9 +13,7 @@ The implementation is intentionally narrow:
 ## Install
 
 ```bash
-python -m venv .venv
-. .venv/bin/activate
-pip install -e ".[dev]"
+uv sync --extra dev
 ```
 
 ## Login
@@ -23,15 +21,15 @@ pip install -e ".[dev]"
 Authorize at least one account before serving traffic.
 
 ```bash
-pengepul --login --provider anthropic
-pengepul --login --provider codex
+uv run pengepul --login --provider anthropic
+uv run pengepul --login --provider codex
 ```
 
 Use manual mode when the browser callback cannot reach localhost:
 
 ```bash
-pengepul --login --provider anthropic --manual
-pengepul --login --provider codex --manual
+uv run pengepul --login --provider anthropic --manual
+uv run pengepul --login --provider codex --manual
 ```
 
 Tokens are stored under `~/.pengepul` by default.
@@ -39,7 +37,7 @@ Tokens are stored under `~/.pengepul` by default.
 ## Run
 
 ```bash
-pengepul --config config.yaml
+uv run pengepul --config config.yaml
 ```
 
 If `config.yaml` does not exist, pengepul creates one with a generated API key.
@@ -90,8 +88,8 @@ x-api-key: sk-local-example
 ## Verify
 
 ```bash
-ruff check .
-ruff format --check .
-python -m compileall pengepul tests
-python -m pytest -q
+uv run --no-sync ruff check .
+uv run --no-sync ruff format --check .
+uv run --no-sync python -m compileall pengepul tests
+uv run --no-sync python -m pytest -q
 ```
