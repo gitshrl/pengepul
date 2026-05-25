@@ -116,6 +116,45 @@ def test_openai_image_content_translates_to_anthropic_sources() -> None:
     }
 
 
+def test_anthropic_images_translate_to_responses_input_images() -> None:
+    out = anthropic_to_responses_request(
+        {
+            "model": "claude-sonnet-4-6",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "inspect"},
+                        {
+                            "type": "image",
+                            "source": {"type": "url", "url": "https://example.com/image.png"},
+                        },
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": "aGVsbG8=",
+                            },
+                        },
+                    ],
+                }
+            ],
+        }
+    )
+
+    assert out["input"] == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "inspect"},
+                {"type": "input_image", "image_url": "https://example.com/image.png"},
+                {"type": "input_image", "image_url": "data:image/png;base64,aGVsbG8="},
+            ],
+        }
+    ]
+
+
 def test_chat_and_anthropic_requests_translate_to_responses_shape() -> None:
     chat = chat_to_responses_request(
         {
@@ -435,6 +474,56 @@ def test_anthropic_to_responses_preserves_mixed_output_order() -> None:
     assert out["output"][0]["content"][0]["text"] == "Before."
     assert out["output"][2]["content"][0]["text"] == "After search."
     assert out["output"][3]["call_id"] == "toolu_1"
+
+
+def test_anthropic_to_responses_sets_output_text() -> None:
+    out = anthropic_to_responses(
+        {
+            "id": "msg_1",
+            "content": [
+                {"type": "text", "text": "Before."},
+                {
+                    "type": "server_tool_use",
+                    "id": "srv_1",
+                    "name": "web_search",
+                    "input": {"query": "latest python release"},
+                },
+                {"type": "text", "text": "After search."},
+            ],
+            "usage": {"input_tokens": 1, "output_tokens": 2},
+        },
+        "claude-sonnet-4-6",
+    )
+
+    assert out["output_text"] == "Before.After search."
+
+
+def test_responses_function_call_translates_to_anthropic_tool_use_stop_reason() -> None:
+    out = responses_to_anthropic_message(
+        {
+            "id": "resp_1",
+            "output": [
+                {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "name": "get_weather",
+                    "arguments": '{"city":"SF"}',
+                }
+            ],
+            "usage": {"input_tokens": 1, "output_tokens": 2},
+        },
+        "gpt-5.4",
+    )
+
+    assert out["content"] == [
+        {
+            "type": "tool_use",
+            "id": "call_1",
+            "name": "get_weather",
+            "input": {"city": "SF"},
+        }
+    ]
+    assert out["stop_reason"] == "tool_use"
 
 
 def test_responses_web_search_response_translates_to_anthropic_message() -> None:

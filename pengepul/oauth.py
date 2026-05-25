@@ -189,11 +189,12 @@ async def refresh_codex_tokens(refresh_token: str) -> TokenData:
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(
             CODEX_TOKEN_URL,
-            json={
+            data={
                 "client_id": CODEX_CLIENT_ID,
                 "grant_type": "refresh_token",
                 "refresh_token": refresh_token,
             },
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
     if resp.status_code >= 400:
         reason = detect_exhausted_reason(resp.text)

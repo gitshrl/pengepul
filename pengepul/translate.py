@@ -124,6 +124,25 @@ def _image_url_to_anthropic(url: str) -> dict[str, Any] | None:
     return {"type": "image", "source": {"type": "url", "url": url}}
 
 
+def _anthropic_image_to_responses(block: dict[str, Any]) -> dict[str, Any] | None:
+    source = block.get("source") or {}
+    if not isinstance(source, dict):
+        return None
+    source_type = source.get("type")
+    if source_type == "url":
+        url = str(source.get("url") or "")
+        if not url:
+            return None
+        return {"type": "input_image", "image_url": url}
+    if source_type == "base64":
+        media_type = str(source.get("media_type") or "image/png")
+        data = str(source.get("data") or "")
+        if not data:
+            return None
+        return {"type": "input_image", "image_url": f"data:{media_type};base64,{data}"}
+    return None
+
+
 def _anthropic_system_from_messages(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
     system: list[dict[str, str]] = []
     for message in messages:
@@ -550,12 +569,14 @@ def responses_to_anthropic(body: dict[str, Any]) -> dict[str, Any]:
 def anthropic_to_responses(payload: dict[str, Any], model: str) -> dict[str, Any]:
     output: list[dict[str, Any]] = []
     text = ""
+    output_text_parts: list[str] = []
     annotations: list[dict[str, Any]] = []
 
     def flush_text() -> None:
         nonlocal text, annotations
         if not text:
             return
+        output_text_parts.append(text)
         content: dict[str, Any] = {"type": "output_text", "text": text}
         if annotations:
             content["annotations"] = annotations
@@ -615,7 +636,7 @@ def anthropic_to_responses(payload: dict[str, Any], model: str) -> dict[str, Any
         "status": "incomplete" if payload.get("stop_reason") == "max_tokens" else "completed",
         "model": model,
         "output": output,
-        "output_text": text,
+        "output_text": "".join(output_text_parts),
         "usage": {
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
@@ -737,15 +758,29 @@ def anthropic_to_responses_request(body: dict[str, Any]) -> dict[str, Any]:
         role = message.get("role")
         content = message.get("content")
         if isinstance(content, list):
-            text_parts: list[str] = []
+            content_parts: list[dict[str, Any]] = []
+
+            def flush_message(message_role: str | None) -> None:
+                nonlocal content_parts
+                if not content_parts:
+                    return
+                if all(part.get("type") == "input_text" for part in content_parts):
+                    text = "".join(str(part.get("text") or "") for part in content_parts)
+                    out["input"].append({"role": message_role, "content": text})
+                else:
+                    out["input"].append({"role": message_role, "content": content_parts})
+                content_parts = []
+
             for block in content:
                 typ = block.get("type") if isinstance(block, dict) else None
                 if typ == "text":
-                    text_parts.append(block.get("text", ""))
+                    content_parts.append({"type": "input_text", "text": block.get("text", "")})
+                elif typ == "image":
+                    image = _anthropic_image_to_responses(block)
+                    if image:
+                        content_parts.append(image)
                 elif typ == "tool_use":
-                    if text_parts:
-                        out["input"].append({"role": role, "content": "".join(text_parts)})
-                        text_parts = []
+                    flush_message(role)
                     out["input"].append(
                         {
                             "type": "function_call",
@@ -755,9 +790,7 @@ def anthropic_to_responses_request(body: dict[str, Any]) -> dict[str, Any]:
                         }
                     )
                 elif typ == "tool_result":
-                    if text_parts:
-                        out["input"].append({"role": role, "content": "".join(text_parts)})
-                        text_parts = []
+                    flush_message(role)
                     out["input"].append(
                         {
                             "type": "function_call_output",
@@ -765,8 +798,7 @@ def anthropic_to_responses_request(body: dict[str, Any]) -> dict[str, Any]:
                             "output": _text_from_content(block.get("content")),
                         }
                     )
-            if text_parts:
-                out["input"].append({"role": role, "content": "".join(text_parts)})
+            flush_message(role)
         else:
             out["input"].append({"role": role, "content": content or ""})
 
@@ -835,6 +867,7 @@ def responses_to_chat_completion(payload: dict[str, Any], model: str) -> dict[st
 
 def responses_to_anthropic_message(payload: dict[str, Any], model: str) -> dict[str, Any]:
     content: list[dict[str, Any]] = []
+    has_tool_use = False
     for item in payload.get("output") or []:
         if item.get("type") == "reasoning":
             text = "".join(s.get("text", "") for s in item.get("summary") or [])
@@ -855,6 +888,7 @@ def responses_to_anthropic_message(payload: dict[str, Any], model: str) -> dict[
                     text_block["citations"] = citations
                 content.append(text_block)
         elif item.get("type") == "function_call":
+            has_tool_use = True
             args = item.get("arguments") or "{}"
             try:
                 parsed = json.loads(args)
@@ -879,19 +913,24 @@ def responses_to_anthropic_message(payload: dict[str, Any], model: str) -> dict[
                 }
             )
     usage = payload.get("usage") or {}
-    return {
+    message = {
         "id": f"msg_{uuid.uuid4().hex}",
         "type": "message",
         "role": "assistant",
         "model": model,
         "content": content,
-        "stop_reason": "max_tokens" if payload.get("status") == "incomplete" else "end_turn",
+        "stop_reason": "end_turn",
         "stop_sequence": None,
         "usage": {
             "input_tokens": int(usage.get("input_tokens") or 0),
             "output_tokens": int(usage.get("output_tokens") or 0),
         },
     }
+    if payload.get("status") == "incomplete":
+        message["stop_reason"] = "max_tokens"
+    elif has_tool_use:
+        message["stop_reason"] = "tool_use"
+    return message
 
 
 @dataclass(slots=True)

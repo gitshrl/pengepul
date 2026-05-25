@@ -303,7 +303,7 @@ class AccountManager:
     def _should_refresh(self, state: AccountState) -> bool:
         if self.refresh_policy.kind == "since-last-refresh":
             if not state.last_refresh_at:
-                return False
+                return True
             elapsed = time.time() - iso_to_timestamp(state.last_refresh_at)
             return elapsed >= self.refresh_policy.seconds
         return iso_to_timestamp(state.token.expires_at) - time.time() <= self.refresh_policy.seconds

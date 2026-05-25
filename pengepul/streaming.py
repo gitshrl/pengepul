@@ -887,6 +887,8 @@ async def passthrough_sse(
                 response = data.get("response") or data
                 usage = usage_from_responses(response.get("usage"))
                 completed = True
+            elif event == "message_stop":
+                completed = True
             _update_anthropic_usage(event, data, usage)
             yield sse(data, event if event != "message" else None).encode("utf-8")
         if completed:

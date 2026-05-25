@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -61,6 +62,20 @@ def test_app_enforces_configured_body_limit(tmp_path: Path) -> None:
     )
     assert response.status_code == 413
     assert response.json()["error"]["message"] == "request body too large"
+
+
+def test_app_rejects_body_without_content_length_when_limit_configured(tmp_path: Path) -> None:
+    config = Config(auth_dir=str(tmp_path), api_keys={"sk-test"}, body_limit="10b")
+    app = create_app(config, build_registry(str(tmp_path)))
+
+    status, body = _post_without_content_length(
+        app,
+        "/v1/messages",
+        b'{"model":"sonnet","messages":[{"role":"user","content":"hi"}]}',
+    )
+
+    assert status == 411
+    assert body == b'{"error":{"message":"missing content-length"}}'
 
 
 def test_responses_route_sends_web_search_and_reasoning_to_anthropic(
@@ -229,6 +244,7 @@ def test_response_payload_from_drain_preserves_hosted_tool_and_text() -> None:
             "content": [{"type": "output_text", "text": "found it"}],
         },
     ]
+    assert payload["output_text"] == "found it"
 
 
 def test_response_payload_from_drain_uses_done_function_call_arguments() -> None:
@@ -316,3 +332,47 @@ def _completed_response_sse(model: str) -> list[bytes]:
             '"output_tokens":1,"total_tokens":2}}}\n\n'
         ).encode()
     ]
+
+
+def _post_without_content_length(app, path: str, body: bytes) -> tuple[int, bytes]:
+    messages: list[dict[str, Any]] = []
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": path,
+        "raw_path": path.encode("ascii"),
+        "query_string": b"",
+        "headers": [
+            (b"authorization", b"Bearer sk-test"),
+            (b"content-type", b"application/json"),
+        ],
+        "client": ("testclient", 50000),
+        "server": ("testserver", 80),
+    }
+    sent = False
+
+    async def receive() -> dict[str, object]:
+        nonlocal sent
+        if sent:
+            return {"type": "http.disconnect"}
+        sent = True
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    async def send(message: dict[str, Any]) -> None:
+        messages.append(message)
+
+    async def call() -> None:
+        await app(scope, receive, send)
+
+    asyncio.run(call())
+    status = next(
+        message["status"] for message in messages if message["type"] == "http.response.start"
+    )
+    response_body = b"".join(
+        message.get("body", b"") for message in messages if message["type"] == "http.response.body"
+    )
+    return int(status), response_body

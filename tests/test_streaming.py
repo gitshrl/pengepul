@@ -10,11 +10,25 @@ from pengepul.streaming import (
     ResponsesStreamState,
     anthropic_sse_to_chat,
     anthropic_sse_to_responses,
+    passthrough_sse,
     responses_sse_to_anthropic,
     responses_sse_to_chat,
 )
 from pengepul.translate import ResponsesDrain, update_drain_from_response_event
 from pengepul.types import UsageData
+
+
+class _FakeClosableSSE:
+    def __init__(self, chunks: list[bytes]) -> None:
+        self._chunks = chunks
+        self.closed = False
+
+    async def aiter_bytes(self):
+        for chunk in self._chunks:
+            yield chunk
+
+    async def aclose(self) -> None:
+        self.closed = True
 
 
 def test_sse_parser_handles_crlf_and_preserves_data_spacing() -> None:
@@ -29,6 +43,30 @@ def test_sse_parser_handles_crlf_and_preserves_data_spacing() -> None:
     )
 
     assert events == [("delta", " leading space"), ("message", "second")]
+
+
+def test_passthrough_sse_marks_anthropic_message_stop_success() -> None:
+    upstream = _FakeClosableSSE(
+        [
+            (b'event: message_start\ndata: {"message":{"usage":{"input_tokens":3}}}\n\n'),
+            b'event: message_delta\ndata: {"usage":{"output_tokens":5}}\n\n',
+            b'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+        ]
+    )
+    successes: list[UsageData] = []
+    failures: list[str] = []
+
+    async def collect() -> list[bytes]:
+        return [
+            chunk async for chunk in passthrough_sse(upstream, successes.append, failures.append)
+        ]
+
+    chunks = asyncio.run(collect())
+
+    assert failures == []
+    assert [(usage.input_tokens, usage.output_tokens) for usage in successes] == [(3, 5)]
+    assert any(b"event: message_stop" in chunk for chunk in chunks)
+    assert upstream.closed is True
 
 
 def test_responses_stream_to_anthropic_switches_content_blocks() -> None:

@@ -76,8 +76,13 @@ def create_app(config: Config, registry: ProviderRegistry | None = None) -> Fast
     async def enforce_body_limit(request: Request, call_next):
         if request.method in {"POST", "PUT", "PATCH"} and body_limit_bytes is not None:
             content_length = request.headers.get("content-length")
+            if content_length is None:
+                return JSONResponse(
+                    {"error": {"message": "missing content-length"}},
+                    status_code=411,
+                )
             try:
-                declared_length = int(content_length) if content_length else 0
+                declared_length = int(content_length)
             except ValueError:
                 return JSONResponse(
                     {"error": {"message": "invalid content-length"}},
@@ -524,6 +529,7 @@ def _response_payload_from_drain(drain, model: str) -> dict[str, Any]:
         payload = dict(drain.completed_response)
         if not payload.get("output"):
             payload["output"] = _output_from_drain(drain)
+        payload.setdefault("output_text", drain.text_out)
         return payload
     return {
         "id": f"resp_{int(time.time() * 1000)}",
@@ -532,6 +538,7 @@ def _response_payload_from_drain(drain, model: str) -> dict[str, Any]:
         "status": drain.status,
         "model": model,
         "output": _output_from_drain(drain),
+        "output_text": drain.text_out,
         "usage": drain.usage,
     }
 
