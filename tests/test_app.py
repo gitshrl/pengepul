@@ -227,6 +227,34 @@ def test_chat_route_preserves_responses_web_search_for_codex(
     assert captured["body"]["stream"] is True
 
 
+def test_responses_route_normalizes_string_input_for_codex(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    _save_provider_token(tmp_path, "codex")
+    captured: dict[str, Any] = {}
+
+    async def fake_call_codex_responses(**kwargs):
+        captured["body"] = kwargs["body"]
+        return _FakeSseUpstream(_completed_response_sse("gpt-5.4"))
+
+    monkeypatch.setattr("pengepul.app.call_codex_responses", fake_call_codex_responses)
+    client = TestClient(create_app(Config(auth_dir=str(tmp_path), api_keys={"sk-test"})))
+
+    response = client.post(
+        "/v1/responses",
+        headers={"Authorization": "Bearer sk-test"},
+        json={
+            "model": "gpt-5.4",
+            "input": "reply exactly: pong",
+            "max_output_tokens": 32,
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["body"]["input"] == [{"role": "user", "content": "reply exactly: pong"}]
+
+
 def test_messages_route_translates_anthropic_web_search_for_codex(
     tmp_path: Path,
     monkeypatch: MonkeyPatch,

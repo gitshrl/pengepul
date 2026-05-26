@@ -324,6 +324,8 @@ async def call_anthropic_count_tokens(
 
 def normalize_codex_responses_body(body: dict[str, Any]) -> dict[str, Any]:
     next_body = dict(body)
+    if isinstance(next_body.get("input"), str):
+        next_body["input"] = [{"role": "user", "content": next_body["input"]}]
     next_body.setdefault("stream", True)
     next_body.setdefault("store", False)
     next_body.setdefault("instructions", "")
