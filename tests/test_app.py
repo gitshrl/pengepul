@@ -78,6 +78,73 @@ def test_app_rejects_body_without_content_length_when_limit_configured(tmp_path:
     assert body == b'{"error":{"message":"missing content-length"}}'
 
 
+def test_messages_route_resolves_anthropic_model_alias(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    _save_provider_token(tmp_path, "anthropic")
+    captured: dict[str, Any] = {}
+
+    async def fake_call_anthropic_messages(**kwargs):
+        captured["body"] = kwargs["body"]
+        return _FakeJsonUpstream(
+            {
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-6",
+                "content": [{"type": "text", "text": "pong"}],
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            }
+        )
+
+    monkeypatch.setattr("pengepul.app.call_anthropic_messages", fake_call_anthropic_messages)
+    client = TestClient(create_app(Config(auth_dir=str(tmp_path), api_keys={"sk-test"})))
+
+    response = client.post(
+        "/v1/messages",
+        headers={"Authorization": "Bearer sk-test"},
+        json={
+            "model": "sonnet",
+            "max_tokens": 32,
+            "messages": [{"role": "user", "content": "reply exactly: pong"}],
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["body"]["model"] == "claude-sonnet-4-6"
+
+
+def test_count_tokens_route_resolves_anthropic_model_alias(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    _save_provider_token(tmp_path, "anthropic")
+    captured: dict[str, Any] = {}
+
+    async def fake_call_anthropic_count_tokens(**kwargs):
+        captured["body"] = kwargs["body"]
+        return _FakeJsonUpstream({"input_tokens": 2})
+
+    monkeypatch.setattr(
+        "pengepul.app.call_anthropic_count_tokens",
+        fake_call_anthropic_count_tokens,
+    )
+    client = TestClient(create_app(Config(auth_dir=str(tmp_path), api_keys={"sk-test"})))
+
+    response = client.post(
+        "/v1/messages/count_tokens",
+        headers={"Authorization": "Bearer sk-test"},
+        json={
+            "model": "sonnet",
+            "messages": [{"role": "user", "content": "reply exactly: pong"}],
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["body"]["model"] == "claude-sonnet-4-6"
+
+
 def test_responses_route_sends_web_search_and_reasoning_to_anthropic(
     tmp_path: Path,
     monkeypatch: MonkeyPatch,

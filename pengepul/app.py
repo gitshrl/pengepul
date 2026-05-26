@@ -194,7 +194,7 @@ def create_app(config: Config, registry: ProviderRegistry | None = None) -> Fast
         provider = registry.for_model(model)
         if provider.id == "codex":
             return await _codex_messages(request, config, provider.manager, body, model)
-        return await _anthropic_messages(request, config, provider.manager, body)
+        return await _anthropic_messages(request, config, provider.manager, body, model)
 
     @app.post("/v1/messages/count_tokens", dependencies=[Depends(require_api_key)])
     async def count_tokens(request: Request) -> Response:
@@ -212,6 +212,7 @@ def create_app(config: Config, registry: ProviderRegistry | None = None) -> Fast
                 },
                 status_code=501,
             )
+        body = {**body, "model": model}
 
         async def upstream(account: AvailableAccount):
             return await call_anthropic_count_tokens(
@@ -423,12 +424,14 @@ async def _anthropic_messages(
     config: Config,
     manager,
     body: dict[str, Any],
+    model: str,
 ) -> Response:
     stream = bool(body.get("stream"))
+    resolved_body = {**body, "model": model}
 
     async def upstream(account: AvailableAccount):
         cloaked = apply_cloaking(
-            body,
+            resolved_body,
             request_headers=_headers(request),
             account=account,
             config=config,
