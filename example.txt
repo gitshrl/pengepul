@@ -1,5 +1,6 @@
 API_KEY=$(awk '/api-keys:/{getline; sub(/^[[:space:]]*-[[:space:]]*/, ""); print; exit}' ~/.pengepul/config.yaml)
 
+# Anthropic / Claude web search
 curl -sS http://127.0.0.1:8317/v1/messages \
   -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
@@ -16,6 +17,38 @@ curl -sS http://127.0.0.1:8317/v1/messages \
       {
         "type": "web_search_20250305",
         "name": "web_search"
+      }
+    ]
+  }'
+
+# Codex login, then restart pengepul before testing Codex routes
+.venv/bin/pengepul --login --provider codex
+
+# Confirm Codex account is loaded
+curl -sS http://127.0.0.1:8317/admin/accounts \
+  -H "Authorization: Bearer $API_KEY"
+
+# Codex basic Responses request
+curl -sS http://127.0.0.1:8317/v1/responses \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-5.4",
+    "input": "reply exactly: pong",
+    "max_output_tokens": 32
+  }'
+
+# Codex web search
+curl -sS http://127.0.0.1:8317/v1/responses \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-5.4",
+    "input": "Use web search and answer with only the current UTC date in ISO format.",
+    "max_output_tokens": 128,
+    "tools": [
+      {
+        "type": "web_search"
       }
     ]
   }'
