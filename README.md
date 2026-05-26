@@ -78,6 +78,92 @@ Authorization: Bearer sk-local-example
 x-api-key: sk-local-example
 ```
 
+## Examples
+
+Load the generated API key from the default config:
+
+```bash
+API_KEY=$(awk '/api-keys:/{getline; sub(/^[[:space:]]*-[[:space:]]*/, ""); print; exit}' ~/.pengepul/config.yaml)
+```
+
+Anthropic / Claude web search:
+
+```bash
+curl -sS http://127.0.0.1:8317/v1/messages \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "sonnet",
+    "max_tokens": 128,
+    "messages": [
+      {
+        "role": "user",
+        "content": "Use web search and answer with only the current UTC date in ISO format."
+      }
+    ],
+    "tools": [
+      {
+        "type": "web_search_20250305",
+        "name": "web_search"
+      }
+    ]
+  }'
+```
+
+Codex login, then restart `pengepul` before testing Codex routes:
+
+```bash
+.venv/bin/pengepul --login --provider codex
+```
+
+Confirm Codex account is loaded:
+
+```bash
+curl -sS http://127.0.0.1:8317/admin/accounts \
+  -H "Authorization: Bearer $API_KEY"
+```
+
+Codex basic Responses request:
+
+```bash
+curl -sS http://127.0.0.1:8317/v1/responses \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-5.4",
+    "input": [
+      {
+        "role": "user",
+        "content": "reply exactly: pong"
+      }
+    ],
+    "max_output_tokens": 32
+  }'
+```
+
+Codex web search:
+
+```bash
+curl -sS http://127.0.0.1:8317/v1/responses \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-5.4",
+    "input": [
+      {
+        "role": "user",
+        "content": "Use web search and answer with only the current UTC date in ISO format."
+      }
+    ],
+    "max_output_tokens": 128,
+    "tools": [
+      {
+        "type": "web_search"
+      }
+    ]
+  }'
+```
+
 ## Behavior
 
 - Account selection is round-robin with short sticky windows.
