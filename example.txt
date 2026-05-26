@@ -1,0 +1,21 @@
+API_KEY=$(awk '/api-keys:/{getline; sub(/^[[:space:]]*-[[:space:]]*/, ""); print; exit}' ~/.pengepul/config.yaml)
+
+curl -sS http://127.0.0.1:8317/v1/messages \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "sonnet",
+    "max_tokens": 128,
+    "messages": [
+      {
+        "role": "user",
+        "content": "Use web search and answer with only the current UTC date in ISO format."
+      }
+    ],
+    "tools": [
+      {
+        "type": "web_search_20250305",
+        "name": "web_search"
+      }
+    ]
+  }'

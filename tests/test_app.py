@@ -78,6 +78,21 @@ def test_app_rejects_body_without_content_length_when_limit_configured(tmp_path:
     assert body == b'{"error":{"message":"missing content-length"}}'
 
 
+def test_invalid_json_body_returns_400(tmp_path: Path) -> None:
+    config = Config(auth_dir=str(tmp_path), api_keys={"sk-test"})
+    app = create_app(config, build_registry(str(tmp_path)))
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.post(
+        "/v1/messages",
+        headers={"Authorization": "Bearer sk-test", "Content-Type": "application/json"},
+        content=b'{"model":"sonnet","messages":[{"role":"user","content":"bad\njson"}]}',
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["message"] == "invalid JSON body"
+
+
 def test_messages_route_resolves_anthropic_model_alias(
     tmp_path: Path,
     monkeypatch: MonkeyPatch,

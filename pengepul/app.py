@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from collections import defaultdict
+from json import JSONDecodeError
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
@@ -71,6 +72,10 @@ def create_app(config: Config, registry: ProviderRegistry | None = None) -> Fast
         detail = exc.detail
         message = detail.get("message") if isinstance(detail, dict) else str(detail)
         return JSONResponse({"error": {"message": message}}, status_code=exc.status_code)
+
+    @app.exception_handler(JSONDecodeError)
+    async def json_decode_error_handler(_request: Request, _exc: JSONDecodeError) -> JSONResponse:
+        return JSONResponse({"error": {"message": "invalid JSON body"}}, status_code=400)
 
     @app.middleware("http")
     async def enforce_body_limit(request: Request, call_next):
