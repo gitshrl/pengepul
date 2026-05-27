@@ -87,6 +87,13 @@ Use `--config /path/to/config.yaml` only when you intentionally want a custom co
 ## Commands
 
 ```bash
+pengepul
+pengepul serve
+pengepul serve --host 127.0.0.1 --port 8318
+pengepul login --provider anthropic
+pengepul login --provider codex
+pengepul login --provider anthropic --manual
+pengepul login --provider codex --manual
 pengepul help
 pengepul help service install
 pengepul status
@@ -95,34 +102,17 @@ pengepul accounts --reload
 pengepul config path
 pengepul config show
 pengepul config api-key
-```
-
-Install a user service on Linux systemd or macOS launchd:
-
-```bash
 pengepul service install --start
-```
-
-Persist a custom bind address in the service:
-
-```bash
 pengepul service install --host 127.0.0.1 --port 8318 --start
-```
-
-On Linux, enable the user service at login:
-
-```bash
 pengepul service install --enable --start
-```
-
-Manage the service:
-
-```bash
+pengepul service start
 pengepul service status
 pengepul service restart
 pengepul service stop
 pengepul service uninstall
 ```
+
+Service install supports Linux systemd and macOS launchd. On Linux, use `--enable` to start the user service at login.
 
 ## Development
 
