@@ -131,6 +131,28 @@ pengepul service stop
 pengepul service uninstall
 ```
 
+## Pi
+
+Install Pengepul as custom Pi providers:
+
+```bash
+pengepul pi install
+```
+
+This writes `~/.pi/agent/models.json` with:
+
+- `pengepul-anthropic` using Pi's `anthropic-messages` API mode.
+- `pengepul-codex` using Pi's `openai-responses` API mode.
+- `apiKey: "!pengepul config api-key"` so Pi reads the current local key.
+
+For a remote Pengepul server:
+
+```bash
+pengepul pi install --base-url http://server.example:8317
+```
+
+Tool calls and provider-hosted `web_search` are handled by Pengepul and the upstream provider. No separate Pi web search bridge is installed.
+
 ## Docker
 
 Build and run:

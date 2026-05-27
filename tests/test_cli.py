@@ -199,3 +199,50 @@ def test_service_install_delegates_custom_host_port(
     assert called["port"] == 8318
     assert called["start"] is False
     assert called["enable"] is False
+
+
+def test_pi_path_prints_default_models_path(
+    tmp_path: Path, monkeypatch: MonkeyPatch, capsys
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    assert cli.run(["pi", "path"]) == 0
+
+    assert capsys.readouterr().out.strip() == str(tmp_path / ".pi" / "agent" / "models.json")
+
+
+def test_pi_install_delegates_config_base_url_and_path(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    _write_config(tmp_path)
+    target = tmp_path / "models.json"
+    called: dict[str, object] = {}
+
+    def fake_install_pi_models_config(config, **kwargs) -> Path:
+        called["port"] = config.port
+        called.update(kwargs)
+        return target
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(cli, "install_pi_models_config", fake_install_pi_models_config)
+
+    assert (
+        cli.run(
+            [
+                "pi",
+                "install",
+                "--base-url",
+                "http://pengepul.example:8317",
+                "--path",
+                str(target),
+            ]
+        )
+        == 0
+    )
+
+    assert called == {
+        "port": 8317,
+        "config_path": None,
+        "base_url": "http://pengepul.example:8317",
+        "target_path": target,
+    }
