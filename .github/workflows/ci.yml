@@ -21,10 +21,10 @@ jobs:
           python-version: "3.12"
 
       - name: install uv
-        run: python -m pip install uv
+        run: python -m pip install uv==0.8.22
 
       - name: install dependencies
-        run: uv sync --extra dev
+        run: uv sync --locked --extra dev
 
       - name: run pre-push hooks
         run: .venv/bin/pre-commit run --hook-stage pre-push --all-files

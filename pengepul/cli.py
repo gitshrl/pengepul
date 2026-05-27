@@ -57,16 +57,6 @@ def run(argv: list[str] | None = None) -> int:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="pengepul")
     parser.add_argument("--config", help="path to config YAML")
-    parser.add_argument("--login", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument(
-        "--provider",
-        choices=("anthropic", "codex"),
-        default="anthropic",
-        help=argparse.SUPPRESS,
-    )
-    parser.add_argument("--manual", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("--host", help=argparse.SUPPRESS)
-    parser.add_argument("--port", type=int, help=argparse.SUPPRESS)
 
     subparsers = parser.add_subparsers(dest="command")
 
@@ -115,9 +105,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _run_default_command(args: Namespace) -> int:
-    if args.login:
-        return _run_login_command(args)
-    return _serve(_args_config_path(args), args.host, args.port)
+    return _serve(args.config, host=None, port=None)
 
 
 def _run_serve_command(args: Namespace) -> int:

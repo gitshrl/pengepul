@@ -26,8 +26,8 @@ def _write_config(home: Path, host: str = "127.0.0.1", port: int = 8317) -> None
     )
 
 
-def test_default_host_port_starts_server(tmp_path: Path, monkeypatch: MonkeyPatch, capsys) -> None:
-    _write_config(tmp_path)
+def test_default_command_starts_server(tmp_path: Path, monkeypatch: MonkeyPatch, capsys) -> None:
+    _write_config(tmp_path, host="0.0.0.0", port=8318)
     called: dict[str, object] = {}
 
     def fake_run_server(config, registry) -> None:
@@ -38,13 +38,13 @@ def test_default_host_port_starts_server(tmp_path: Path, monkeypatch: MonkeyPatc
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(cli, "_run_server", fake_run_server)
 
-    assert cli.run(["--host", "127.0.0.1", "--port", "8318"]) == 0
+    assert cli.run([]) == 0
 
-    assert called == {"host": "127.0.0.1", "port": 8318, "accounts": 2}
+    assert called == {"host": "0.0.0.0", "port": 8318, "accounts": 2}
     assert capsys.readouterr().err == ""
 
 
-def test_help_hides_compatibility_flags() -> None:
+def test_top_level_help_uses_subcommands() -> None:
     help_text = cli._build_parser().format_help()
 
     assert "--login" not in help_text

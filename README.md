@@ -2,7 +2,7 @@
 
 ## About
 
-`pengepul` is an OAuth-to-API relay for Claude and Codex accounts. It exposes familiar API routes while routing requests to the matching upstream provider, rotating account tokens, refreshing credentials, and translating request/response shapes where needed.
+`pengepul` is a relay for Claude and Codex accounts. It exposes familiar API routes while routing requests to the matching upstream provider, rotating account tokens, refreshing credentials, and translating request/response shapes where needed.
 
 The implementation is intentionally narrow:
 
