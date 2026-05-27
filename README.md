@@ -84,7 +84,7 @@ debug: off
 
 Use `--config /path/to/config.yaml` only when you intentionally want a custom config path.
 
-## CLI
+## Commands
 
 ```bash
 pengepul help
@@ -96,15 +96,6 @@ pengepul config path
 pengepul config show
 pengepul config api-key
 ```
-
-Install git hooks for local quality gates:
-
-```bash
-uv sync --extra dev
-.venv/bin/pre-commit install --hook-type pre-commit --hook-type pre-push
-```
-
-## Service
 
 Install a user service on Linux systemd or macOS launchd:
 
@@ -131,6 +122,15 @@ pengepul service status
 pengepul service restart
 pengepul service stop
 pengepul service uninstall
+```
+
+## Development
+
+Install git hooks for local quality gates:
+
+```bash
+uv sync --extra dev
+.venv/bin/pre-commit install --hook-type pre-commit --hook-type pre-push
 ```
 
 ## Docker
