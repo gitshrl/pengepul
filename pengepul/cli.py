@@ -111,6 +111,11 @@ def _build_parser() -> argparse.ArgumentParser:
     pi_install.add_argument("--config", dest="command_config", help="path to config YAML")
     pi_install.add_argument("--base-url", help="Pengepul server URL, without /v1")
     pi_install.add_argument("--path", type=Path, help="path to Pi models.json")
+    pi_install.add_argument(
+        "--web-search",
+        action="store_true",
+        help="enable provider-hosted web search for Pi requests",
+    )
     pi_subparsers.add_parser("path", help="print Pi models.json path")
     return parser
 
@@ -249,6 +254,7 @@ def _run_pi_command(args: Namespace) -> int:
                 config_path=config_path,
                 target_path=args.path,
                 base_url=args.base_url,
+                web_search=args.web_search,
             )
         except ValueError as exc:
             print(f"pi: {exc}")

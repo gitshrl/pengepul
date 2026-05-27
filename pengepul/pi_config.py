@@ -10,15 +10,22 @@ from .config import Config
 
 ANTHROPIC_PROVIDER_ID = "pengepul-anthropic"
 CODEX_PROVIDER_ID = "pengepul-codex"
+PI_WEB_SEARCH_HEADER = "x-pengepul-web-search"
+PI_WEB_SEARCH_HEADER_VALUE = "auto"
 
 
 def pi_models_path() -> Path:
     return Path.home() / ".pi" / "agent" / "models.json"
 
 
-def build_pi_models_config(base_url: str, api_key_command: str) -> dict[str, Any]:
+def build_pi_models_config(
+    base_url: str,
+    api_key_command: str,
+    *,
+    web_search: bool = False,
+) -> dict[str, Any]:
     root_url = base_url.rstrip("/")
-    return {
+    payload = {
         "providers": {
             ANTHROPIC_PROVIDER_ID: {
                 "baseUrl": root_url,
@@ -79,6 +86,11 @@ def build_pi_models_config(base_url: str, api_key_command: str) -> dict[str, Any
             },
         }
     }
+    if web_search:
+        headers = {PI_WEB_SEARCH_HEADER: PI_WEB_SEARCH_HEADER_VALUE}
+        payload["providers"][ANTHROPIC_PROVIDER_ID]["headers"] = dict(headers)
+        payload["providers"][CODEX_PROVIDER_ID]["headers"] = dict(headers)
+    return payload
 
 
 def install_pi_models_config(
@@ -87,12 +99,14 @@ def install_pi_models_config(
     config_path: str | None,
     target_path: Path | None,
     base_url: str | None,
+    web_search: bool = False,
 ) -> Path:
     path = target_path or pi_models_path()
     existing = _load_existing_config(path)
     generated = build_pi_models_config(
         base_url=base_url or _base_url(config),
         api_key_command=_api_key_command(config_path),
+        web_search=web_search,
     )
     merged = _merge_models_config(existing, generated)
     _write_json(path, merged)

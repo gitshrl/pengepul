@@ -235,6 +235,7 @@ def test_pi_install_delegates_config_base_url_and_path(
                 "http://pengepul.example:8317",
                 "--path",
                 str(target),
+                "--web-search",
             ]
         )
         == 0
@@ -245,4 +246,5 @@ def test_pi_install_delegates_config_base_url_and_path(
         "config_path": None,
         "base_url": "http://pengepul.example:8317",
         "target_path": target,
+        "web_search": True,
     }

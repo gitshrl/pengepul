@@ -55,6 +55,21 @@ def test_build_pi_models_config_targets_pengepul_providers() -> None:
         expected_thinking,
         expected_thinking,
     ]
+    assert "headers" not in anthropic
+    assert "headers" not in codex
+
+
+def test_build_pi_models_config_can_enable_provider_web_search() -> None:
+    payload = build_pi_models_config(
+        base_url="http://127.0.0.1:8317",
+        api_key_command="!pengepul config api-key",
+        web_search=True,
+    )
+
+    assert payload["providers"]["pengepul-anthropic"]["headers"] == {
+        "x-pengepul-web-search": "auto"
+    }
+    assert payload["providers"]["pengepul-codex"]["headers"] == {"x-pengepul-web-search": "auto"}
 
 
 def test_install_pi_models_config_merges_existing_providers(tmp_path: Path) -> None:

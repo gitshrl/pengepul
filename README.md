@@ -133,7 +133,7 @@ pengepul service uninstall
 
 ## Pi
 
-Install Pengepul as custom Pi providers:
+Create or update Pi's Pengepul provider config:
 
 ```bash
 pengepul pi install
@@ -147,10 +147,25 @@ This writes `~/.pi/agent/models.json` with:
   `gpt-5.5` and `gpt-5.4` support Pi `xhigh` thinking.
 - `apiKey: "!pengepul config api-key"` so Pi reads the current local key.
 
+Enable provider-hosted web search for Pi requests:
+
+```bash
+pengepul pi install --web-search
+```
+
+This only writes Pi config. It does not install a Pi extension or a separate search package.
+Pi's built-in default thinking level is `medium` unless `~/.pi/agent/settings.json` overrides it.
+Use `--thinking xhigh` when you want maximum reasoning on `gpt-5.5`:
+
+```bash
+pi --model pengepul-codex/gpt-5.5 --thinking xhigh \
+  -p "Use web search. Jadwal final UCL kapan?"
+```
+
 For a remote Pengepul server:
 
 ```bash
-pengepul pi install --base-url http://server.example:8317
+pengepul pi install --base-url http://server.example:8317 --web-search
 ```
 
 Tool calls and provider-hosted `web_search` are handled by Pengepul and the upstream provider. No separate Pi web search bridge is installed.
@@ -259,7 +274,7 @@ curl -sS http://127.0.0.1:8317/v1/responses \
   -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "gpt-5.4",
+    "model": "gpt-5.5",
     "input": [
       {
         "role": "user",
@@ -277,7 +292,7 @@ curl -sS http://127.0.0.1:8317/v1/responses \
   -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "gpt-5.4",
+    "model": "gpt-5.5",
     "input": [
       {
         "role": "user",
@@ -285,6 +300,9 @@ curl -sS http://127.0.0.1:8317/v1/responses \
       }
     ],
     "max_output_tokens": 128,
+    "reasoning": {
+      "effort": "xhigh"
+    },
     "tools": [
       {
         "type": "web_search"

@@ -3,13 +3,14 @@ from __future__ import annotations
 import time
 from collections import defaultdict
 from json import JSONDecodeError
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from .config import Config
+from .pi_config import PI_WEB_SEARCH_HEADER, PI_WEB_SEARCH_HEADER_VALUE
 from .providers import ProviderRegistry, build_registry
 from .proxy import openai_error_body, proxy_with_retry
 from .streaming import (
@@ -25,6 +26,8 @@ from .streaming import (
     transformed_sse,
 )
 from .translate import (
+    ANTHROPIC_WEB_SEARCH_TOOL_TYPE,
+    ANTHROPIC_WEB_SEARCH_TOOL_TYPES,
     anthropic_to_openai,
     anthropic_to_responses,
     anthropic_to_responses_request,
@@ -48,6 +51,7 @@ from .utils import extract_api_key, now_iso
 
 RATE_LIMIT_WINDOW_SECONDS = 60
 RATE_LIMIT_MAX = 60
+OPENAI_WEB_SEARCH_TOOL_TYPES = {"web_search", "web_search_preview"}
 
 
 def create_app(config: Config, registry: ProviderRegistry | None = None) -> FastAPI:
@@ -184,7 +188,7 @@ def create_app(config: Config, registry: ProviderRegistry | None = None) -> Fast
         model = resolve_model(body.get("model"))
         provider = registry.for_model(model)
         if provider.id == "codex":
-            return await _codex_responses(config, provider.manager, body, model)
+            return await _codex_responses(request, config, provider.manager, body, model)
         return await _anthropic_responses(request, config, provider.manager, body, model)
 
     @app.post("/v1/messages", dependencies=[Depends(require_api_key)])
@@ -248,6 +252,7 @@ async def _anthropic_chat(
     model: str,
 ) -> Response:
     stream = bool(body.get("stream"))
+    body = _with_pi_web_search(request, body, "chat")
     translated = openai_to_anthropic(body)
     structured = (body.get("response_format") or {}).get("type") in ("json_object", "json_schema")
 
@@ -300,6 +305,7 @@ async def _codex_chat(
     model: str,
 ) -> Response:
     client_wants_stream = bool(body.get("stream"))
+    body = _with_pi_web_search(request, body, "chat")
     responses_body = normalize_codex_responses_body(chat_to_responses_request(body))
     responses_body.pop("max_output_tokens", None)
     responses_body.pop("parallel_tool_calls", None)
@@ -343,6 +349,7 @@ async def _anthropic_responses(
     model: str,
 ) -> Response:
     client_wants_stream = bool(body.get("stream"))
+    body = _with_pi_web_search(request, body, "responses")
     translated = responses_to_anthropic(body)
     structured = ((body.get("text") or {}).get("format") or {}).get("type") in (
         "json_object",
@@ -389,8 +396,15 @@ async def _anthropic_responses(
     return await proxy_with_retry(manager, upstream, success, openai_error_body)
 
 
-async def _codex_responses(config: Config, manager, body: dict[str, Any], model: str) -> Response:
+async def _codex_responses(
+    request: Request,
+    config: Config,
+    manager,
+    body: dict[str, Any],
+    model: str,
+) -> Response:
     client_wants_stream = bool(body.get("stream"))
+    body = _with_pi_web_search(request, body, "responses")
     responses_body = normalize_codex_responses_body(body)
     responses_body.pop("max_output_tokens", None)
     responses_body.pop("parallel_tool_calls", None)
@@ -432,6 +446,7 @@ async def _anthropic_messages(
     model: str,
 ) -> Response:
     stream = bool(body.get("stream"))
+    body = _with_pi_web_search(request, body, "anthropic")
     resolved_body = {**body, "model": model}
 
     async def upstream(account: AvailableAccount):
@@ -477,6 +492,7 @@ async def _codex_messages(
     model: str,
 ) -> Response:
     client_wants_stream = bool(body.get("stream"))
+    body = _with_pi_web_search(request, body, "anthropic")
     responses_body = normalize_codex_responses_body(anthropic_to_responses_request(body))
     responses_body.pop("max_output_tokens", None)
     responses_body.pop("parallel_tool_calls", None)
@@ -514,6 +530,54 @@ async def _codex_messages(
 
 def _headers(request: Request) -> dict[str, str]:
     return {key.lower(): value for key, value in request.headers.items()}
+
+
+def _with_pi_web_search(
+    request: Request,
+    body: dict[str, Any],
+    request_format: Literal["anthropic", "chat", "responses"],
+) -> dict[str, Any]:
+    if (
+        _headers(request).get(PI_WEB_SEARCH_HEADER, "").strip().lower()
+        != PI_WEB_SEARCH_HEADER_VALUE
+    ):
+        return body
+    if request_format == "chat":
+        if _has_web_search_tool(body, ("tools", "responses_tools")):
+            return body
+        return {
+            **body,
+            "responses_tools": [*_tool_list(body.get("responses_tools")), {"type": "web_search"}],
+        }
+    if _has_web_search_tool(body, ("tools",)):
+        return body
+    if request_format == "anthropic":
+        tool = {"type": ANTHROPIC_WEB_SEARCH_TOOL_TYPE, "name": "web_search"}
+    else:
+        tool = {"type": "web_search"}
+    return {**body, "tools": [*_tool_list(body.get("tools")), tool]}
+
+
+def _has_web_search_tool(body: dict[str, Any], keys: tuple[str, ...]) -> bool:
+    for key in keys:
+        if any(_is_web_search_tool(tool) for tool in _tool_list(body.get(key))):
+            return True
+    return False
+
+
+def _tool_list(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
+
+
+def _is_web_search_tool(tool: Any) -> bool:
+    if not isinstance(tool, dict):
+        return False
+    if tool.get("type") in (*OPENAI_WEB_SEARCH_TOOL_TYPES, *ANTHROPIC_WEB_SEARCH_TOOL_TYPES):
+        return True
+    if tool.get("name") == "web_search":
+        return True
+    function = tool.get("function")
+    return isinstance(function, dict) and function.get("name") == "web_search"
 
 
 def _parse_body_limit(value: str) -> int | None:
