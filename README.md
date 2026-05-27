@@ -7,7 +7,7 @@
 The implementation is intentionally narrow:
 
 - Claude models route to the Anthropic Messages API.
-- GPT, o-series, and Codex models route to the Codex Responses backend.
+- GPT models route to the Codex Responses backend.
 - Other upstream providers are not included yet.
 
 ## Install
