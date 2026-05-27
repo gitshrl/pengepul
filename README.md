@@ -131,45 +131,6 @@ pengepul service stop
 pengepul service uninstall
 ```
 
-## Pi
-
-Create or update Pi's Pengepul provider config:
-
-```bash
-pengepul pi install
-```
-
-This writes `~/.pi/agent/models.json` with:
-
-- `pengepul-anthropic` using Pi's `anthropic-messages` API mode:
-  `sonnet` is Claude Sonnet 4.6, `opus` is Claude Opus 4.7, and `haiku` is Claude Haiku 4.5.
-- `pengepul-codex` using Pi's `openai-responses` API mode:
-  `gpt-5.5` and `gpt-5.4` support Pi `xhigh` thinking.
-- `apiKey: "!pengepul config api-key"` so Pi reads the current local key.
-
-Enable provider-hosted web search for Pi requests:
-
-```bash
-pengepul pi install --web-search
-```
-
-This only writes Pi config. It does not install a Pi extension or a separate search package.
-Pi's built-in default thinking level is `medium` unless `~/.pi/agent/settings.json` overrides it.
-Use `--thinking xhigh` when you want maximum reasoning on `gpt-5.5`:
-
-```bash
-pi --model pengepul-codex/gpt-5.5 --thinking xhigh \
-  -p "Use web search. Jadwal final UCL kapan?"
-```
-
-For a remote Pengepul server:
-
-```bash
-pengepul pi install --base-url http://server.example:8317 --web-search
-```
-
-Tool calls and provider-hosted `web_search` are handled by Pengepul and the upstream provider. No separate Pi web search bridge is installed.
-
 ## Docker
 
 Build and run:

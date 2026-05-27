@@ -17,7 +17,6 @@ from .admin_client import AdminClientError, get_accounts, get_health, reload_acc
 from .app import create_app
 from .callback import CallbackResult, wait_for_callback
 from .config import Config, load_config, selected_config_path
-from .pi_config import install_pi_models_config, pi_models_path
 from .providers import build_registry
 from .service import (
     install_service,
@@ -52,8 +51,6 @@ def run(argv: list[str] | None = None) -> int:
         return _run_config_command(args)
     if args.command == "service":
         return _run_service_command(args)
-    if args.command == "pi":
-        return _run_pi_command(args)
     raise SystemExit(f"unknown command: {args.command}")
 
 
@@ -105,18 +102,6 @@ def _build_parser() -> argparse.ArgumentParser:
     service_subparsers.add_parser("status", help="show service manager status")
     service_subparsers.add_parser("uninstall", help="remove user service")
 
-    pi = subparsers.add_parser("pi", help="manage Pi integration")
-    pi_subparsers = pi.add_subparsers(dest="pi_command", required=True)
-    pi_install = pi_subparsers.add_parser("install", help="install Pi models config")
-    pi_install.add_argument("--config", dest="command_config", help="path to config YAML")
-    pi_install.add_argument("--base-url", help="Pengepul server URL, without /v1")
-    pi_install.add_argument("--path", type=Path, help="path to Pi models.json")
-    pi_install.add_argument(
-        "--web-search",
-        action="store_true",
-        help="enable provider-hosted web search for Pi requests",
-    )
-    pi_subparsers.add_parser("path", help="print Pi models.json path")
     return parser
 
 
@@ -239,29 +224,6 @@ def _run_service_command(args: Namespace) -> int:
         print(f"service: {exc}")
         return 1
     raise SystemExit(f"unknown service command: {args.service_command}")
-
-
-def _run_pi_command(args: Namespace) -> int:
-    if args.pi_command == "path":
-        print(pi_models_path())
-        return 0
-    if args.pi_command == "install":
-        config_path = _args_config_path(args)
-        config = load_config(config_path)
-        try:
-            path = install_pi_models_config(
-                config,
-                config_path=config_path,
-                target_path=args.path,
-                base_url=args.base_url,
-                web_search=args.web_search,
-            )
-        except ValueError as exc:
-            print(f"pi: {exc}")
-            return 1
-        print(f"installed Pi models: {path}")
-        return 0
-    raise SystemExit(f"unknown pi command: {args.pi_command}")
 
 
 async def _login(registry, provider_id: ProviderId, manual: bool) -> None:

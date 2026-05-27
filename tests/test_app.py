@@ -178,49 +178,6 @@ def test_count_tokens_route_resolves_anthropic_model_alias(
     assert captured["body"]["model"] == "claude-sonnet-4-6"
 
 
-def test_messages_route_injects_pi_web_search_for_anthropic(
-    tmp_path: Path,
-    monkeypatch: MonkeyPatch,
-) -> None:
-    _save_provider_token(tmp_path, "anthropic")
-    captured: dict[str, Any] = {}
-
-    async def fake_call_anthropic_messages(**kwargs):
-        captured["body"] = kwargs["body"]
-        return _FakeJsonUpstream(
-            {
-                "id": "msg_1",
-                "type": "message",
-                "role": "assistant",
-                "model": "claude-sonnet-4-6",
-                "content": [{"type": "text", "text": "ok"}],
-                "usage": {"input_tokens": 1, "output_tokens": 1},
-            }
-        )
-
-    monkeypatch.setattr("pengepul.app.call_anthropic_messages", fake_call_anthropic_messages)
-    client = TestClient(create_app(Config(auth_dir=str(tmp_path), api_keys={"sk-test"})))
-
-    response = client.post(
-        "/v1/messages",
-        headers={
-            "Authorization": "Bearer sk-test",
-            "X-Pengepul-Web-Search": "auto",
-        },
-        json={
-            "model": "sonnet",
-            "messages": [{"role": "user", "content": "latest docs?"}],
-            "tools": [{"name": "get_weather", "input_schema": {"type": "object"}}],
-        },
-    )
-
-    assert response.status_code == 200
-    assert captured["body"]["tools"] == [
-        {"name": "get_weather", "input_schema": {"type": "object"}},
-        {"type": "web_search_20260209", "name": "web_search"},
-    ]
-
-
 def test_responses_route_sends_web_search_and_reasoning_to_anthropic(
     tmp_path: Path,
     monkeypatch: MonkeyPatch,
@@ -286,65 +243,6 @@ def test_chat_route_preserves_responses_web_search_for_codex(
     assert captured["body"]["tools"] == [{"type": "web_search", "search_context_size": "low"}]
     assert captured["body"]["tool_choice"] == "auto"
     assert captured["body"]["stream"] is True
-
-
-def test_responses_route_injects_pi_web_search_for_codex(
-    tmp_path: Path,
-    monkeypatch: MonkeyPatch,
-) -> None:
-    _save_provider_token(tmp_path, "codex")
-    captured: dict[str, Any] = {}
-
-    async def fake_call_codex_responses(**kwargs):
-        captured["body"] = kwargs["body"]
-        return _FakeSseUpstream(_completed_response_sse("gpt-5.4"))
-
-    monkeypatch.setattr("pengepul.app.call_codex_responses", fake_call_codex_responses)
-    client = TestClient(create_app(Config(auth_dir=str(tmp_path), api_keys={"sk-test"})))
-
-    response = client.post(
-        "/v1/responses",
-        headers={
-            "Authorization": "Bearer sk-test",
-            "X-Pengepul-Web-Search": "auto",
-        },
-        json={"model": "gpt-5.4", "input": "jadwal final ucl kapan?"},
-    )
-
-    assert response.status_code == 200
-    assert captured["body"]["tools"] == [{"type": "web_search"}]
-    assert captured["body"]["stream"] is True
-
-
-def test_responses_route_does_not_duplicate_pi_web_search_for_codex(
-    tmp_path: Path,
-    monkeypatch: MonkeyPatch,
-) -> None:
-    _save_provider_token(tmp_path, "codex")
-    captured: dict[str, Any] = {}
-
-    async def fake_call_codex_responses(**kwargs):
-        captured["body"] = kwargs["body"]
-        return _FakeSseUpstream(_completed_response_sse("gpt-5.4"))
-
-    monkeypatch.setattr("pengepul.app.call_codex_responses", fake_call_codex_responses)
-    client = TestClient(create_app(Config(auth_dir=str(tmp_path), api_keys={"sk-test"})))
-
-    response = client.post(
-        "/v1/responses",
-        headers={
-            "Authorization": "Bearer sk-test",
-            "X-Pengepul-Web-Search": "auto",
-        },
-        json={
-            "model": "gpt-5.4",
-            "input": "jadwal final ucl kapan?",
-            "tools": [{"type": "web_search", "search_context_size": "low"}],
-        },
-    )
-
-    assert response.status_code == 200
-    assert captured["body"]["tools"] == [{"type": "web_search", "search_context_size": "low"}]
 
 
 def test_responses_route_normalizes_string_input_for_codex(
