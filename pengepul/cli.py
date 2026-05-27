@@ -51,6 +51,8 @@ def run(argv: list[str] | None = None) -> int:
         return _run_config_command(args)
     if args.command == "service":
         return _run_service_command(args)
+    if args.command == "help":
+        return _run_help_command(args)
     raise SystemExit(f"unknown command: {args.command}")
 
 
@@ -101,6 +103,9 @@ def _build_parser() -> argparse.ArgumentParser:
     service_subparsers.add_parser("restart", help="restart service")
     service_subparsers.add_parser("status", help="show service manager status")
     service_subparsers.add_parser("uninstall", help="remove user service")
+
+    help_command = subparsers.add_parser("help", help="show help for a command")
+    help_command.add_argument("topic", nargs=argparse.REMAINDER)
 
     return parser
 
@@ -224,6 +229,19 @@ def _run_service_command(args: Namespace) -> int:
         print(f"service: {exc}")
         return 1
     raise SystemExit(f"unknown service command: {args.service_command}")
+
+
+def _run_help_command(args: Namespace) -> int:
+    parser = _build_parser()
+    topic = list(args.topic or [])
+    if not topic:
+        parser.print_help()
+        return 0
+    try:
+        parser.parse_args([*topic, "--help"])
+    except SystemExit as exc:
+        return int(exc.code or 0)
+    return 0
 
 
 async def _login(registry, provider_id: ProviderId, manual: bool) -> None:

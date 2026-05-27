@@ -55,6 +55,23 @@ def test_top_level_help_uses_subcommands() -> None:
     assert "serve" in help_text
 
 
+def test_help_command_prints_top_level_help(capsys) -> None:
+    assert cli.run(["help"]) == 0
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert captured.out == cli._build_parser().format_help()
+
+
+def test_help_command_prints_nested_help(capsys) -> None:
+    assert cli.run(["help", "service", "install"]) == 0
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert captured.out.startswith("usage: pengepul service install")
+    assert "--enable" in captured.out
+
+
 def test_serve_subcommand_starts_server_with_custom_host_port(
     tmp_path: Path, monkeypatch: MonkeyPatch
 ) -> None:

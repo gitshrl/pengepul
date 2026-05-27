@@ -87,6 +87,8 @@ Use `--config /path/to/config.yaml` only when you intentionally want a custom co
 ## CLI
 
 ```bash
+pengepul help
+pengepul help service install
 pengepul status
 pengepul accounts
 pengepul accounts --reload
