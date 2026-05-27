@@ -68,7 +68,7 @@ def test_openai_chat_to_anthropic_translates_web_search_tool() -> None:
 
     assert out["tools"] == [
         {
-            "type": "web_search_20250305",
+            "type": "web_search_20260209",
             "name": "web_search",
             "max_uses": 2,
             "allowed_domains": ["docs.anthropic.com"],
@@ -80,6 +80,18 @@ def test_openai_chat_to_anthropic_translates_web_search_tool() -> None:
         }
     ]
     assert out["tool_choice"] == {"type": "tool", "name": "web_search"}
+
+
+def test_openai_chat_to_anthropic_preserves_explicit_web_search_version() -> None:
+    out = openai_to_anthropic(
+        {
+            "model": "sonnet",
+            "messages": [{"role": "user", "content": "latest docs?"}],
+            "tools": [{"type": "web_search_20250305", "name": "web_search"}],
+        }
+    )
+
+    assert out["tools"] == [{"type": "web_search_20250305", "name": "web_search"}]
 
 
 def test_openai_image_content_translates_to_anthropic_sources() -> None:
@@ -202,7 +214,7 @@ def test_responses_request_translates_web_search_to_anthropic() -> None:
 
     assert out["tools"] == [
         {
-            "type": "web_search_20250305",
+            "type": "web_search_20260209",
             "name": "web_search",
             "blocked_domains": ["example.com"],
             "user_location": {"type": "approximate", "country": "US"},

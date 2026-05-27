@@ -13,7 +13,7 @@ MODEL_ALIASES = {
     "sonnet": "claude-sonnet-4-6",
     "haiku": "claude-haiku-4-5-20251001",
 }
-ANTHROPIC_WEB_SEARCH_TOOL_TYPE = "web_search_20250305"
+ANTHROPIC_WEB_SEARCH_TOOL_TYPE = "web_search_20260209"
 ANTHROPIC_WEB_SEARCH_TOOL_TYPES = {
     "web_search_20250305",
     "web_search_20260209",

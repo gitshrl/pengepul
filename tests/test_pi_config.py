@@ -35,12 +35,26 @@ def test_build_pi_models_config_targets_pengepul_providers() -> None:
     assert anthropic["authHeader"] is True
     assert anthropic["compat"] == {"supportsEagerToolInputStreaming": False}
     assert [model["id"] for model in anthropic["models"]] == ["sonnet", "opus", "haiku"]
+    assert [model["name"] for model in anthropic["models"]] == [
+        "Claude Sonnet 4.6 via Pengepul",
+        "Claude Opus 4.7 via Pengepul",
+        "Claude Haiku 4.5 via Pengepul",
+    ]
 
     assert codex["baseUrl"] == "http://127.0.0.1:8317/v1"
     assert codex["api"] == "openai-responses"
     assert codex["apiKey"] == "!pengepul config api-key"
     assert codex["authHeader"] is True
-    assert [model["id"] for model in codex["models"]] == ["gpt-5.4"]
+    assert [model["id"] for model in codex["models"]] == ["gpt-5.5", "gpt-5.4"]
+    expected_thinking = {
+        "off": "none",
+        "minimal": "low",
+        "xhigh": "xhigh",
+    }
+    assert [model["thinkingLevelMap"] for model in codex["models"]] == [
+        expected_thinking,
+        expected_thinking,
+    ]
 
 
 def test_install_pi_models_config_merges_existing_providers(tmp_path: Path) -> None:

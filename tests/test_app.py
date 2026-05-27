@@ -210,7 +210,7 @@ def test_responses_route_sends_web_search_and_reasoning_to_anthropic(
     )
 
     assert response.status_code == 200
-    assert captured["body"]["tools"] == [{"type": "web_search_20250305", "name": "web_search"}]
+    assert captured["body"]["tools"] == [{"type": "web_search_20260209", "name": "web_search"}]
     assert captured["body"]["thinking"]["budget_tokens"] == 4096
 
 

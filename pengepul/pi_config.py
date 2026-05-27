@@ -29,19 +29,19 @@ def build_pi_models_config(base_url: str, api_key_command: str) -> dict[str, Any
                 "models": [
                     {
                         "id": "sonnet",
-                        "name": "Claude Sonnet via Pengepul",
+                        "name": "Claude Sonnet 4.6 via Pengepul",
                         "reasoning": True,
                         "input": ["text", "image"],
                     },
                     {
                         "id": "opus",
-                        "name": "Claude Opus via Pengepul",
+                        "name": "Claude Opus 4.7 via Pengepul",
                         "reasoning": True,
                         "input": ["text", "image"],
                     },
                     {
                         "id": "haiku",
-                        "name": "Claude Haiku via Pengepul",
+                        "name": "Claude Haiku 4.5 via Pengepul",
                         "reasoning": False,
                         "input": ["text", "image"],
                     },
@@ -54,11 +54,27 @@ def build_pi_models_config(base_url: str, api_key_command: str) -> dict[str, Any
                 "authHeader": True,
                 "models": [
                     {
+                        "id": "gpt-5.5",
+                        "name": "GPT-5.5 via Pengepul",
+                        "reasoning": True,
+                        "thinkingLevelMap": {
+                            "off": "none",
+                            "minimal": "low",
+                            "xhigh": "xhigh",
+                        },
+                        "input": ["text", "image"],
+                    },
+                    {
                         "id": "gpt-5.4",
                         "name": "GPT-5.4 via Pengepul",
                         "reasoning": True,
+                        "thinkingLevelMap": {
+                            "off": "none",
+                            "minimal": "low",
+                            "xhigh": "xhigh",
+                        },
                         "input": ["text", "image"],
-                    }
+                    },
                 ],
             },
         }

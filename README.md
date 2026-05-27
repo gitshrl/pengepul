@@ -141,8 +141,10 @@ pengepul pi install
 
 This writes `~/.pi/agent/models.json` with:
 
-- `pengepul-anthropic` using Pi's `anthropic-messages` API mode.
-- `pengepul-codex` using Pi's `openai-responses` API mode.
+- `pengepul-anthropic` using Pi's `anthropic-messages` API mode:
+  `sonnet` is Claude Sonnet 4.6, `opus` is Claude Opus 4.7, and `haiku` is Claude Haiku 4.5.
+- `pengepul-codex` using Pi's `openai-responses` API mode:
+  `gpt-5.5` and `gpt-5.4` support Pi `xhigh` thinking.
 - `apiKey: "!pengepul config api-key"` so Pi reads the current local key.
 
 For a remote Pengepul server:
@@ -230,7 +232,7 @@ curl -sS http://127.0.0.1:8317/v1/messages \
     ],
     "tools": [
       {
-        "type": "web_search_20250305",
+        "type": "web_search_20260209",
         "name": "web_search"
       }
     ]
