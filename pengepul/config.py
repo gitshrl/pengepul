@@ -108,6 +108,10 @@ def _config_paths(config_path: str | None) -> tuple[Path, Path]:
     return path, path
 
 
+def selected_config_path(config_path: str | None = None) -> Path:
+    return _config_paths(config_path)[1]
+
+
 def _write_config(path: Path, raw: dict[str, Any], private_parent: bool) -> None:
     if private_parent:
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)

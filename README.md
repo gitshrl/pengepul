@@ -7,10 +7,24 @@
 The implementation is intentionally narrow:
 
 - Claude models route to the Anthropic Messages API.
-- GPT-5, o-series, and Codex models route to the Codex Responses backend.
-- No other upstream providers are included.
+- GPT, o-series, and Codex models route to the Codex Responses backend.
+- Other upstream providers are not included yet.
 
 ## Install
+
+Install the command with uv:
+
+```bash
+uv tool install git+https://github.com/gitshrl/pengepul.git
+```
+
+For local development from this checkout:
+
+```bash
+uv tool install --editable . --force
+```
+
+Install development dependencies only when working on the repo:
 
 ```bash
 uv sync --extra dev
@@ -21,15 +35,15 @@ uv sync --extra dev
 Authorize at least one account before serving traffic.
 
 ```bash
-.venv/bin/pengepul --login --provider anthropic
-.venv/bin/pengepul --login --provider codex
+pengepul login --provider anthropic
+pengepul login --provider codex
 ```
 
 Use manual mode when the browser callback cannot reach localhost:
 
 ```bash
-.venv/bin/pengepul --login --provider anthropic --manual
-.venv/bin/pengepul --login --provider codex --manual
+pengepul login --provider anthropic --manual
+pengepul login --provider codex --manual
 ```
 
 Tokens are stored under `~/.pengepul` by default.
@@ -37,7 +51,17 @@ Tokens are stored under `~/.pengepul` by default.
 ## Run
 
 ```bash
-.venv/bin/pengepul
+pengepul
+```
+
+```bash
+pengepul serve
+```
+
+Bind a custom host or port:
+
+```bash
+pengepul serve --host 127.0.0.1 --port 8318
 ```
 
 If `~/.pengepul/config.yaml` does not exist, pengepul creates one with a generated API key.
@@ -59,6 +83,87 @@ debug: off
 ```
 
 Use `--config /path/to/config.yaml` only when you intentionally want a custom config path.
+
+## CLI
+
+```bash
+pengepul status
+pengepul accounts
+pengepul accounts --reload
+pengepul config path
+pengepul config show
+pengepul config api-key
+```
+
+Install git hooks for local quality gates:
+
+```bash
+uv sync --extra dev
+.venv/bin/pre-commit install --hook-type pre-commit --hook-type pre-push
+```
+
+## Service
+
+Install a user service on Linux systemd or macOS launchd:
+
+```bash
+pengepul service install --start
+```
+
+Persist a custom bind address in the service:
+
+```bash
+pengepul service install --host 127.0.0.1 --port 8318 --start
+```
+
+On Linux, enable the user service at login:
+
+```bash
+pengepul service install --enable --start
+```
+
+Manage the service:
+
+```bash
+pengepul service status
+pengepul service restart
+pengepul service stop
+pengepul service uninstall
+```
+
+## Docker
+
+Build and run:
+
+```bash
+docker build -t pengepul .
+docker run --rm -p 8317:8317 \
+  -v "$HOME/.pengepul:/home/pengepul/.pengepul" \
+  pengepul
+```
+
+Or use Compose:
+
+```bash
+docker compose up --build
+```
+
+The simplest Docker login flow is to login on the host first, then mount `~/.pengepul` into the container.
+
+```bash
+pengepul login --provider anthropic
+pengepul login --provider codex
+```
+
+If you need to login inside the container, use manual mode:
+
+```bash
+docker run --rm -it \
+  -v "$HOME/.pengepul:/home/pengepul/.pengepul" \
+  pengepul login --provider anthropic --manual
+```
+
+Open the printed URL in the host browser. If the browser cannot reach the callback URL, copy the final browser URL containing `code` and `state`, then paste it back into the container prompt.
 
 ## Routes
 
@@ -113,7 +218,7 @@ curl -sS http://127.0.0.1:8317/v1/messages \
 Codex login, then restart `pengepul` before testing Codex routes:
 
 ```bash
-.venv/bin/pengepul --login --provider codex
+pengepul login --provider codex
 ```
 
 Confirm Codex account is loaded:
@@ -171,13 +276,3 @@ curl -sS http://127.0.0.1:8317/v1/responses \
 - Tokens refresh before expiry or on the configured Codex refresh cadence.
 - Streaming responses are translated between Anthropic SSE, OpenAI chat chunks, and Responses API events.
 - Request body size is bounded by `body-limit`.
-- CORS is limited to localhost origins.
-
-## Verify
-
-```bash
-.venv/bin/ruff check .
-.venv/bin/ruff format --check .
-.venv/bin/python -m compileall pengepul tests
-.venv/bin/python -m pytest -q
-```

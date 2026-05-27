@@ -93,6 +93,24 @@ def test_invalid_json_body_returns_400(tmp_path: Path) -> None:
     assert response.json()["error"]["message"] == "invalid JSON body"
 
 
+def test_cors_allows_remote_origins(tmp_path: Path) -> None:
+    config = Config(auth_dir=str(tmp_path), api_keys={"sk-test"})
+    app = create_app(config, build_registry(str(tmp_path)))
+    client = TestClient(app)
+
+    response = client.options(
+        "/v1/messages",
+        headers={
+            "Origin": "https://client.example.com",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "authorization,content-type",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "*"
+
+
 def test_messages_route_resolves_anthropic_model_alias(
     tmp_path: Path,
     monkeypatch: MonkeyPatch,

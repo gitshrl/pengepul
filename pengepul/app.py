@@ -62,9 +62,9 @@ def create_app(config: Config, registry: ProviderRegistry | None = None) -> Fast
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
+        allow_origins=["*"],
         allow_methods=["GET", "POST", "OPTIONS"],
-        allow_headers=["Content-Type", "Authorization", "x-api-key"],
+        allow_headers=["*"],
     )
 
     @app.exception_handler(HTTPException)
