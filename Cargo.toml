@@ -5,7 +5,7 @@ edition = "2024"
 rust-version = "1.95"
 
 [lints.rust]
-unsafe_code = "deny"
+unsafe_code = "forbid"
 
 [lints.clippy]
 all = "warn"
