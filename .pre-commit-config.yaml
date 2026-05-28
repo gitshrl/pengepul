@@ -1,30 +1,23 @@
 repos:
   - repo: local
     hooks:
-      - id: ruff-check
-        name: ruff check
-        entry: .venv/bin/ruff check .
+      - id: cargo-fmt
+        name: cargo fmt
+        entry: cargo fmt --check
         language: system
         pass_filenames: false
         stages: [pre-commit, pre-push]
 
-      - id: ruff-format-check
-        name: ruff format check
-        entry: .venv/bin/ruff format --check .
+      - id: cargo-test
+        name: cargo test
+        entry: cargo test --locked
         language: system
         pass_filenames: false
-        stages: [pre-commit, pre-push]
+        stages: [pre-push]
 
-      - id: compileall
-        name: compile python
-        entry: .venv/bin/python -m compileall pengepul tests
-        language: system
-        pass_filenames: false
-        stages: [pre-commit, pre-push]
-
-      - id: pytest
-        name: pytest
-        entry: .venv/bin/python -m pytest -q
+      - id: cargo-clippy
+        name: cargo clippy
+        entry: cargo clippy --locked --all-targets --all-features -- -D warnings
         language: system
         pass_filenames: false
         stages: [pre-push]

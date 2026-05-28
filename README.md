@@ -12,22 +12,22 @@ The implementation is intentionally narrow:
 
 ## Install
 
-Install the command with uv:
+Install the command with Cargo:
 
 ```bash
-uv tool install git+https://github.com/gitshrl/pengepul.git
+cargo install --git https://github.com/gitshrl/pengepul.git --locked
 ```
 
 For local development from this checkout:
 
 ```bash
-uv tool install --editable . --force
+cargo install --path . --locked --force
 ```
 
-Install development dependencies only when working on the repo:
+This repository is pinned to Rust 1.95.0 through `rust-toolchain.toml`.
 
 ```bash
-uv sync --extra dev
+rustup toolchain install 1.95.0
 ```
 
 ## Login
@@ -116,46 +116,19 @@ Service install supports Linux systemd and macOS launchd. On Linux, use `--enabl
 
 ## Development
 
-Install git hooks for local quality gates:
+Run the Rust quality gates:
 
 ```bash
-uv sync --extra dev
-.venv/bin/pre-commit install --hook-type pre-commit --hook-type pre-push
+cargo fmt --check
+cargo test --locked
+cargo clippy --locked --all-targets --all-features -- -D warnings
 ```
 
-## Docker
-
-Build and run:
+Install git hooks only if you use pre-commit locally:
 
 ```bash
-docker build -t pengepul .
-docker run --rm -p 8317:8317 \
-  -v "$HOME/.pengepul:/home/pengepul/.pengepul" \
-  pengepul
+pre-commit install --hook-type pre-commit --hook-type pre-push
 ```
-
-Or use Compose:
-
-```bash
-docker compose up --build
-```
-
-The simplest Docker login flow is to login on the host first, then mount `~/.pengepul` into the container.
-
-```bash
-pengepul login --provider anthropic
-pengepul login --provider codex
-```
-
-If you need to login inside the container, use manual mode:
-
-```bash
-docker run --rm -it \
-  -v "$HOME/.pengepul:/home/pengepul/.pengepul" \
-  pengepul login --provider anthropic --manual
-```
-
-Open the printed URL in the host browser. If the browser cannot reach the callback URL, copy the final browser URL containing `code` and `state`, then paste it back into the container prompt.
 
 ## Routes
 

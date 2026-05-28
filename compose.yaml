@@ -1,8 +1,0 @@
-services:
-  pengepul:
-    build: .
-    command: ["serve", "--host", "0.0.0.0"]
-    ports:
-      - "8317:8317"
-    volumes:
-      - "${HOME}/.pengepul:/home/pengepul/.pengepul"
