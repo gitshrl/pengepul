@@ -124,12 +124,6 @@ cargo test --locked
 cargo clippy --locked --all-targets --all-features -- -D warnings
 ```
 
-Install git hooks only if you use pre-commit locally:
-
-```bash
-pre-commit install --hook-type pre-commit --hook-type pre-push
-```
-
 ## Routes
 
 - `GET /health`
