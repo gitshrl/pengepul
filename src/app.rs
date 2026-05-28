@@ -1404,6 +1404,31 @@ fn codex_request_body(body: &Value, model: &str, route: RequestRoute) -> Value {
     normalized
 }
 
+/// Build a POST request with a JSON body and provider headers.
+///
+/// `.json()` already sets `Content-Type: application/json`, so any `content-type` entry in
+/// `headers` is skipped to avoid sending a duplicate header. The Codex backend rejects a
+/// duplicate `Content-Type` with "Unsupported content type".
+fn build_upstream_request(
+    client: &reqwest::Client,
+    url: &str,
+    headers: BTreeMap<String, String>,
+    body: &Value,
+    timeout_ms: u64,
+) -> reqwest::RequestBuilder {
+    let mut request = client
+        .post(url)
+        .timeout(std::time::Duration::from_millis(timeout_ms))
+        .json(body);
+    for (key, value) in headers {
+        if key.eq_ignore_ascii_case("content-type") {
+            continue;
+        }
+        request = request.header(key, value);
+    }
+    request
+}
+
 async fn send_json(
     client: reqwest::Client,
     url: String,
@@ -1416,14 +1441,9 @@ async fn send_json(
         .and_then(Value::as_str)
         .unwrap_or("claude-sonnet-4-6")
         .to_string();
-    let mut request = client
-        .post(&url)
-        .timeout(std::time::Duration::from_millis(timeout_ms))
-        .json(&body);
-    for (key, value) in headers {
-        request = request.header(key, value);
-    }
-    let response = request.send().await?;
+    let response = build_upstream_request(&client, &url, headers, &body, timeout_ms)
+        .send()
+        .await?;
     let mut status = StatusCode::from_u16(response.status().as_u16())?;
     let headers = response.headers().clone();
     let bytes = response.bytes().await?;
@@ -1441,14 +1461,9 @@ async fn send_stream(
     body: Value,
     timeout_ms: u64,
 ) -> anyhow::Result<UpstreamSseResponse> {
-    let mut request = client
-        .post(&url)
-        .timeout(std::time::Duration::from_millis(timeout_ms))
-        .json(&body);
-    for (key, value) in headers {
-        request = request.header(key, value);
-    }
-    let response = request.send().await?;
+    let response = build_upstream_request(&client, &url, headers, &body, timeout_ms)
+        .send()
+        .await?;
     let status = StatusCode::from_u16(response.status().as_u16())?;
     Ok(UpstreamSseResponse {
         status,
@@ -1536,7 +1551,8 @@ mod tests {
     use super::{
         AccountManagers, AppState, BodyLimit, RateLimitBucket, RequestRoute, UpstreamClient,
         UpstreamFuture, UpstreamJsonResponse, UpstreamRequest, UpstreamSseFuture,
-        decode_upstream_body, is_decoded_upstream_error, route_provider_request,
+        build_upstream_request, decode_upstream_body, is_decoded_upstream_error,
+        route_provider_request,
     };
     use crate::accounts::{AccountManager, RefreshPolicy};
     use crate::config::{CloakingConfig, Config, DebugMode, TimeoutConfig};
@@ -1544,6 +1560,40 @@ mod tests {
     use crate::tokens::save_token;
     use crate::types::{ProviderId, TokenData};
     use serde_json::{Value, json};
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn upstream_request_sends_single_content_type() {
+        let headers = BTreeMap::from([
+            ("Content-Type".to_string(), "application/json".to_string()),
+            ("Accept".to_string(), "text/event-stream".to_string()),
+            ("Authorization".to_string(), "Bearer token".to_string()),
+        ]);
+        let body = json!({"model": "gpt-5.5", "stream": true});
+        let request = build_upstream_request(
+            &reqwest::Client::new(),
+            "https://chatgpt.com/backend-api/codex/responses",
+            headers,
+            &body,
+            30_000,
+        )
+        .build()
+        .expect("request builds");
+        let content_types: Vec<_> = request
+            .headers()
+            .get_all(reqwest::header::CONTENT_TYPE)
+            .iter()
+            .collect();
+        assert_eq!(content_types.len(), 1, "exactly one Content-Type header");
+        assert_eq!(content_types[0], "application/json");
+        assert_eq!(
+            request
+                .headers()
+                .get(reqwest::header::ACCEPT)
+                .and_then(|value| value.to_str().ok()),
+            Some("text/event-stream"),
+        );
+    }
 
     #[derive(Default)]
     struct CapturingUpstream {
