@@ -7,7 +7,7 @@ use serde_json::Value;
 
 use crate::app::create_app;
 use crate::cli::{CliRuntime, ServiceInstallRequest};
-use crate::config::Config;
+use crate::config::{Config, DebugMode};
 use crate::oauth::{
     ANTHROPIC_REDIRECT_URI, CODEX_CALLBACK_PATH, CODEX_CALLBACK_PORT, exchange_anthropic_code,
     exchange_codex_code, generate_anthropic_auth_url, generate_codex_auth_url,
@@ -17,6 +17,21 @@ use crate::service::{ServiceOptions, run_command};
 use crate::tokens::save_token;
 use crate::types::{PkceCodes, ProviderId};
 use crate::utils::{generate_pkce_codes, random_urlsafe};
+
+/// Install the tracing subscriber for `serve`.
+///
+/// `RUST_LOG` overrides everything; otherwise the level follows the `debug` config:
+/// `off`/`errors` log at info (startup banner + upstream warnings/errors), `verbose` adds
+/// per-request debug detail.
+fn init_tracing(debug: DebugMode) {
+    let default = match debug {
+        DebugMode::Off | DebugMode::Errors => "pengepul=info",
+        DebugMode::Verbose => "pengepul=debug",
+    };
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default));
+    let _ = tracing_subscriber::fmt().with_env_filter(filter).try_init();
+}
 
 pub struct RealRuntime {
     runtime: tokio::runtime::Runtime,
@@ -37,12 +52,14 @@ impl RealRuntime {
 
 impl CliRuntime for RealRuntime {
     fn run_server(&mut self, config: &Config, _registry: &ProviderRegistry) -> Result<()> {
+        init_tracing(config.debug);
         let bind_addr = server_bind_addr(config);
         let app = create_app(config.clone());
         self.runtime.block_on(async move {
             let listener = tokio::net::TcpListener::bind(&bind_addr)
                 .await
                 .with_context(|| format!("failed to bind {bind_addr}"))?;
+            tracing::info!("pengepul listening on {bind_addr}");
             axum::serve(listener, app).await.context("server failed")
         })
     }

@@ -124,6 +124,16 @@ cargo test --locked
 cargo clippy --locked --all-targets --all-features -- -D warnings
 ```
 
+## Logging
+
+`serve` logs via `tracing`. The level follows the `debug` config key (`off`/`errors` log the
+startup banner and upstream errors at `info`; `verbose` adds per-request detail at `debug`).
+`RUST_LOG` overrides it, e.g.:
+
+```bash
+RUST_LOG=pengepul=debug pengepul serve
+```
+
 ## Routes
 
 - `GET /health`

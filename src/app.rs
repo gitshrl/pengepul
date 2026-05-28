@@ -1416,6 +1416,7 @@ fn build_upstream_request(
     body: &Value,
     timeout_ms: u64,
 ) -> reqwest::RequestBuilder {
+    tracing::debug!(%url, "upstream request");
     let mut request = client
         .post(url)
         .timeout(std::time::Duration::from_millis(timeout_ms))
@@ -1451,6 +1452,11 @@ async fn send_json(
     if status.is_success() && is_decoded_upstream_error(&body) {
         status = StatusCode::BAD_GATEWAY;
     }
+    if status.is_success() {
+        tracing::debug!(%url, model = %model, status = status.as_u16(), "upstream response");
+    } else {
+        tracing::warn!(%url, model = %model, status = status.as_u16(), "upstream error response");
+    }
     Ok(UpstreamJsonResponse { status, body })
 }
 
@@ -1465,6 +1471,11 @@ async fn send_stream(
         .send()
         .await?;
     let status = StatusCode::from_u16(response.status().as_u16())?;
+    if status.is_success() {
+        tracing::debug!(%url, status = status.as_u16(), "upstream stream opened");
+    } else {
+        tracing::warn!(%url, status = status.as_u16(), "upstream stream error");
+    }
     Ok(UpstreamSseResponse {
         status,
         body: Box::pin(response.bytes_stream().map_err(anyhow::Error::from)),
