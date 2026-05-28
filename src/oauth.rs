@@ -103,13 +103,9 @@ pub async fn exchange_anthropic_code(
     anthropic_token(&serde_json::from_str(&body).context("Anthropic token response is not JSON")?)
 }
 
-/// Refresh an Anthropic OAuth token.
-///
-/// # Errors
-///
-/// Returns an error when the token endpoint fails or the response body is invalid.
-pub async fn refresh_anthropic_tokens(refresh_token: String) -> Result<TokenData> {
-    let response = reqwest::Client::new()
+/// Build the Anthropic OAuth refresh request (JSON body).
+fn anthropic_refresh_request(refresh_token: &str) -> reqwest::RequestBuilder {
+    reqwest::Client::new()
         .post(ANTHROPIC_TOKEN_URL)
         .json(&serde_json::json!({
             "client_id": ANTHROPIC_CLIENT_ID,
@@ -117,8 +113,15 @@ pub async fn refresh_anthropic_tokens(refresh_token: String) -> Result<TokenData
             "refresh_token": refresh_token,
         }))
         .timeout(std::time::Duration::from_secs(30))
-        .send()
-        .await?;
+}
+
+/// Refresh an Anthropic OAuth token.
+///
+/// # Errors
+///
+/// Returns an error when the token endpoint fails or the response body is invalid.
+pub async fn refresh_anthropic_tokens(refresh_token: String) -> Result<TokenData> {
+    let response = anthropic_refresh_request(&refresh_token).send().await?;
     let status = response.status();
     let body = response.text().await?;
     if !status.is_success() {
@@ -166,22 +169,25 @@ pub async fn exchange_codex_code(
     codex_token(&serde_json::from_str(&body).context("Codex token response is not JSON")?)
 }
 
+/// Build the Codex OAuth refresh request (form-encoded body).
+fn codex_refresh_request(refresh_token: &str) -> reqwest::RequestBuilder {
+    reqwest::Client::new()
+        .post(CODEX_TOKEN_URL)
+        .form(&[
+            ("grant_type", "refresh_token"),
+            ("client_id", CODEX_CLIENT_ID),
+            ("refresh_token", refresh_token),
+        ])
+        .timeout(std::time::Duration::from_secs(30))
+}
+
 /// Refresh a Codex OAuth token.
 ///
 /// # Errors
 ///
 /// Returns an error when the token endpoint fails or the response body is invalid.
 pub async fn refresh_codex_tokens(refresh_token: String) -> Result<TokenData> {
-    let response = reqwest::Client::new()
-        .post(CODEX_TOKEN_URL)
-        .form(&[
-            ("grant_type", "refresh_token"),
-            ("client_id", CODEX_CLIENT_ID),
-            ("refresh_token", refresh_token.as_str()),
-        ])
-        .timeout(std::time::Duration::from_secs(30))
-        .send()
-        .await?;
+    let response = codex_refresh_request(&refresh_token).send().await?;
     let status = response.status();
     let body = response.text().await?;
     if !status.is_success() {
@@ -265,4 +271,51 @@ fn required_string(data: &Value, field: &str) -> Result<String> {
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
         .with_context(|| format!("token response is missing {field}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn content_type(req: &reqwest::Request) -> String {
+        req.headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_owned()
+    }
+
+    fn body_string(req: &reqwest::Request) -> String {
+        let bytes = req
+            .body()
+            .and_then(reqwest::Body::as_bytes)
+            .expect("refresh request always sets a body");
+        std::str::from_utf8(bytes)
+            .expect("refresh request body is valid utf-8")
+            .to_owned()
+    }
+
+    #[test]
+    fn codex_refresh_uses_form_encoded_request() {
+        let req = codex_refresh_request("refresh-xyz")
+            .build()
+            .expect("codex refresh request builds");
+        assert_eq!(req.url().as_str(), CODEX_TOKEN_URL);
+        assert_eq!(content_type(&req), "application/x-www-form-urlencoded");
+        let body = body_string(&req);
+        assert!(body.contains("grant_type=refresh_token"), "{body}");
+        assert!(body.contains("refresh_token=refresh-xyz"), "{body}");
+    }
+
+    #[test]
+    fn anthropic_refresh_uses_json_request() {
+        let req = anthropic_refresh_request("refresh-xyz")
+            .build()
+            .expect("anthropic refresh request builds");
+        assert_eq!(req.url().as_str(), ANTHROPIC_TOKEN_URL);
+        assert_eq!(content_type(&req), "application/json");
+        let body = body_string(&req);
+        assert!(body.contains("\"grant_type\":\"refresh_token\""), "{body}");
+        assert!(body.contains("\"refresh_token\":\"refresh-xyz\""), "{body}");
+    }
 }
