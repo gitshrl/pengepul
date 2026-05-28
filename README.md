@@ -177,7 +177,7 @@ curl -sS http://127.0.0.1:8317/v1/messages \
     ],
     "tools": [
       {
-        "type": "web_search_20260209",
+        "type": "web_search_20250305",
         "name": "web_search"
       }
     ]

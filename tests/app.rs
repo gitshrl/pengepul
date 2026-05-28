@@ -832,7 +832,7 @@ async fn responses_route_sends_web_search_and_reasoning_to_anthropic() {
     assert_eq!(calls.len(), 1);
     assert_eq!(
         calls[0].body["tools"],
-        json!([{"type": "web_search_20260209", "name": "web_search"}])
+        json!([{"type": "web_search_20250305", "name": "web_search"}])
     );
     assert_eq!(calls[0].body["thinking"]["budget_tokens"], 4096);
 }

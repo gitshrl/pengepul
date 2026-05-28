@@ -53,7 +53,7 @@ fn openai_chat_to_anthropic_translates_web_search_tool() {
     assert_eq!(
         out["tools"],
         json!([{
-            "type": "web_search_20260209",
+            "type": "web_search_20250305",
             "name": "web_search",
             "max_uses": 2,
             "allowed_domains": ["docs.anthropic.com"],
@@ -172,7 +172,7 @@ fn responses_request_translates_tools_to_anthropic() {
     assert_eq!(
         web["tools"],
         json!([{
-            "type": "web_search_20260209",
+            "type": "web_search_20250305",
             "name": "web_search",
             "blocked_domains": ["example.com"],
             "user_location": {"type": "approximate", "country": "US"}

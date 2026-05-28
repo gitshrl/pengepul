@@ -1,7 +1,7 @@
 use serde_json::{Map, Value, json};
 
-const ANTHROPIC_WEB_SEARCH_TOOL_TYPE: &str = "web_search_20260209";
-const ANTHROPIC_WEB_SEARCH_TOOL_TYPES: [&str; 2] = ["web_search_20250305", "web_search_20260209"];
+const ANTHROPIC_WEB_SEARCH_TOOL_TYPE: &str = "web_search_20250305";
+const ANTHROPIC_WEB_SEARCH_TOOL_TYPES: [&str; 1] = [ANTHROPIC_WEB_SEARCH_TOOL_TYPE];
 
 pub const MODEL_ALIASES: [(&str, &str); 3] = [
     ("opus", "claude-opus-4-8"),
