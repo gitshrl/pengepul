@@ -96,6 +96,13 @@ pub trait CliRuntime {
     /// Returns an error if the service cannot be stopped, disabled, or removed.
     fn uninstall_service(&mut self) -> Result<PathBuf>;
 
+    /// Show the installed user service logs.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the log viewer command cannot be spawned.
+    fn service_logs(&mut self, follow: bool, lines: u32) -> Result<()>;
+
     /// Authorize and save an upstream account.
     ///
     /// # Errors
@@ -207,6 +214,15 @@ enum ServiceCommand {
     Status,
     /// remove user service
     Uninstall,
+    /// show service logs (uses the user journal on Linux)
+    Logs {
+        /// follow the log stream (Ctrl-C to stop)
+        #[arg(long, short = 'f')]
+        follow: bool,
+        /// number of past log lines to show
+        #[arg(long, short = 'n', default_value_t = 50)]
+        lines: u32,
+    },
 }
 
 /// Run CLI logic against explicit filesystem roots and an injected runtime.
@@ -439,6 +455,7 @@ fn service_command(
             let path = runtime.uninstall_service()?;
             output.line(&format!("uninstalled service: {}", path.display()));
         }
+        ServiceCommand::Logs { follow, lines } => runtime.service_logs(follow, lines)?,
     }
     Ok(())
 }
