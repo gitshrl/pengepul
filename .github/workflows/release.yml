@@ -1,0 +1,154 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  checks:
+    name: checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@v6.0.2
+
+      - name: set up rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.95.0
+          components: rustfmt, clippy
+
+      - name: check tag matches Cargo version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(cargo pkgid --locked | sed 's/.*@//')"
+          tag="${GITHUB_REF_NAME#v}"
+          test "${version}" = "${tag}"
+
+      - name: check formatting
+        run: cargo fmt --check
+
+      - name: run tests
+        run: cargo test --locked
+
+      - name: run clippy
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+
+  build:
+    name: build ${{ matrix.target }}
+    needs: checks
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: tar.gz
+          - os: macos-13
+            target: x86_64-apple-darwin
+            archive: tar.gz
+          - os: macos-14
+            target: aarch64-apple-darwin
+            archive: tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: zip
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@v6.0.2
+
+      - name: set up rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.95.0
+          targets: ${{ matrix.target }}
+
+      - name: build release binary
+        run: cargo build --locked --release --target ${{ matrix.target }}
+
+      - name: package unix archive
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          package_dir="pengepul-${TAG}-${TARGET}"
+          archive="pengepul-${TARGET}.tar.gz"
+          mkdir -p "dist" "${package_dir}"
+          cp "target/${TARGET}/release/pengepul" "${package_dir}/pengepul"
+          chmod +x "${package_dir}/pengepul"
+          cp README.md "${package_dir}/README.md"
+          tar -czf "dist/${archive}" "${package_dir}"
+          shasum -a 256 "dist/${archive}" | sed 's#dist/##' > "dist/${archive}.sha256"
+
+      - name: package windows archive
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          TARGET: ${{ matrix.target }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          $packageDir = "pengepul-$env:TAG-$env:TARGET"
+          $archive = "pengepul-$env:TARGET.zip"
+          New-Item -ItemType Directory -Force -Path dist, $packageDir | Out-Null
+          Copy-Item "target/$env:TARGET/release/pengepul.exe" "$packageDir/pengepul.exe"
+          Copy-Item README.md "$packageDir/README.md"
+          Compress-Archive -Path $packageDir -DestinationPath "dist/$archive" -Force
+          $hash = (Get-FileHash -Algorithm SHA256 "dist/$archive").Hash.ToLowerInvariant()
+          "$hash  $archive" | Out-File -FilePath "dist/$archive.sha256" -Encoding ascii
+
+      - name: upload release assets
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: release-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: download release assets
+        uses: actions/download-artifact@v8.0.1
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: verify checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          for checksum in *.sha256; do
+            shasum -a 256 -c "${checksum}"
+          done
+
+      - name: publish GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release upload "${TAG}" dist/* --repo "${GITHUB_REPOSITORY}" --clobber
+          else
+            gh release create "${TAG}" dist/* \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "${TAG}" \
+              --generate-notes \
+              --verify-tag
+          fi
