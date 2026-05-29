@@ -17,6 +17,7 @@ pub const CODEX_RESPONSES_PATH: &str = "/codex/responses";
 pub const CODEX_MODELS_PATH: &str = "/codex/models";
 pub const CODEX_DEFAULT_ORIGINATOR: &str = "codex_cli_rs";
 pub const CODEX_DEFAULT_CLI_VERSION: &str = "0.125.0";
+pub const OPENCODE_GO_BASE_URL: &str = "https://opencode.ai/zen/go/v1";
 
 const FINGERPRINT_SALT: &str = "59cf53e54c78";
 
@@ -289,6 +290,25 @@ pub fn codex_headers(
         headers.insert("OpenAI-Beta".to_string(), beta.clone());
     }
     headers
+}
+
+/// Build headers for an opencode-go chat/completions request.
+///
+/// opencode-go is a static-key, OpenAI-compatible gateway: bearer auth, no cloaking.
+#[must_use]
+pub fn opencode_go_headers(api_key: &str, stream: bool) -> BTreeMap<String, String> {
+    BTreeMap::from([
+        ("Content-Type".to_string(), "application/json".to_string()),
+        ("Authorization".to_string(), format!("Bearer {api_key}")),
+        (
+            "Accept".to_string(),
+            if stream {
+                "text/event-stream".to_string()
+            } else {
+                "application/json".to_string()
+            },
+        ),
+    ])
 }
 
 fn session_id(api_key_hash: &str) -> String {

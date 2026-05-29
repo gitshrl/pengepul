@@ -101,7 +101,13 @@ pub trait CliRuntime {
     /// # Errors
     ///
     /// Returns an error if OAuth authorization, token exchange, or token persistence fails.
-    fn login(&mut self, config: &Config, provider: ProviderId, manual: bool) -> Result<String>;
+    fn login(
+        &mut self,
+        config: &Config,
+        provider: ProviderId,
+        manual: bool,
+        key: Option<&str>,
+    ) -> Result<String>;
 }
 
 #[derive(Debug, Parser)]
@@ -129,10 +135,13 @@ enum Command {
     Login {
         #[arg(long = "config")]
         command_config: Option<PathBuf>,
-        #[arg(long, default_value = "anthropic", value_parser = ["anthropic", "codex"])]
+        #[arg(long, default_value = "anthropic", value_parser = ["anthropic", "codex", "opencode-go"])]
         provider: String,
         #[arg(long)]
         manual: bool,
+        /// opencode-go API key (defaults to importing it from opencode's auth.json)
+        #[arg(long)]
+        key: Option<String>,
     },
     /// show local server status
     Status {
@@ -279,11 +288,13 @@ pub fn run_with_env(
             command_config,
             provider,
             manual,
+            key,
         }) => {
             login(
                 command_config.as_deref().or(parsed_args.config.as_deref()),
                 &provider,
                 manual,
+                key.as_deref(),
                 home,
                 cwd,
                 runtime,
@@ -432,10 +443,12 @@ fn service_command(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn login(
     config_path: Option<&Path>,
     provider: &str,
     manual: bool,
+    key: Option<&str>,
     home: &Path,
     cwd: &Path,
     runtime: &mut impl CliRuntime,
@@ -443,7 +456,10 @@ fn login(
 ) -> Result<()> {
     let config = load_config(config_path, Some(home), cwd)?;
     let provider = provider.parse::<ProviderId>().map_err(anyhow::Error::msg)?;
-    let email = runtime.login(&config, provider, manual)?;
+    if provider == ProviderId::OpenCodeGo && manual {
+        bail!("--manual is not supported for opencode-go (it uses a static API key, not OAuth)");
+    }
+    let email = runtime.login(&config, provider, manual, key)?;
     output.line(&format!("saved {provider} account token for {email}"));
     Ok(())
 }
