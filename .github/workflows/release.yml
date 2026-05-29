@@ -25,10 +25,14 @@ jobs:
 
       - name: check tag matches Cargo version
         shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           version="$(cargo pkgid --locked | sed 's/.*@//')"
-          tag="${GITHUB_REF_NAME#v}"
+          tag="${TAG#v}"
+          echo "Cargo version: ${version}"
+          echo "Tag version: ${tag}"
           test "${version}" = "${tag}"
 
       - name: check formatting
