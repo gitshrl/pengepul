@@ -20,7 +20,7 @@ jobs:
       - name: set up rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.95.0
+          toolchain: 1.96.0
           components: rustfmt, clippy
 
       - name: check tag matches Cargo version
@@ -67,7 +67,7 @@ jobs:
       - name: set up rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.95.0
+          toolchain: 1.96.0
           targets: ${{ matrix.target }}
 
       - name: build release binary
