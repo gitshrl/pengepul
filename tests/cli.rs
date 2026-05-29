@@ -101,6 +101,12 @@ impl CliRuntime for FakeRuntime {
         Ok("/tmp/pengepul.service".into())
     }
 
+    fn service_logs(&mut self, follow: bool, lines: u32) -> Result<()> {
+        self.calls
+            .push(format!("service:logs:follow={follow}:lines={lines}"));
+        Ok(())
+    }
+
     fn login(
         &mut self,
         _config: &Config,
@@ -334,6 +340,32 @@ fn login_delegates_provider_and_manual_mode() {
         outcome.stdout.trim(),
         "saved codex account token for codex@example.com"
     );
+}
+
+#[test]
+fn service_logs_passes_follow_and_lines() {
+    let tmp = tempdir().expect("tempdir");
+    let mut runtime = FakeRuntime::default();
+
+    let outcome = run(
+        &["service", "logs", "-f", "-n", "100"],
+        tmp.path(),
+        &mut runtime,
+    );
+
+    assert_eq!(outcome.code, 0);
+    assert_eq!(runtime.calls, ["service:logs:follow=true:lines=100"]);
+}
+
+#[test]
+fn service_logs_defaults_to_recent_lines_without_follow() {
+    let tmp = tempdir().expect("tempdir");
+    let mut runtime = FakeRuntime::default();
+
+    let outcome = run(&["service", "logs"], tmp.path(), &mut runtime);
+
+    assert_eq!(outcome.code, 0);
+    assert_eq!(runtime.calls, ["service:logs:follow=false:lines=50"]);
 }
 
 #[test]

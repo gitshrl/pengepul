@@ -120,6 +120,10 @@ impl CliRuntime for RealRuntime {
         uninstall_platform_service(&home)
     }
 
+    fn service_logs(&mut self, follow: bool, lines: u32) -> Result<()> {
+        platform_service_logs(follow, lines)
+    }
+
     fn login(
         &mut self,
         config: &Config,
@@ -520,6 +524,24 @@ fn uninstall_platform_service(home: &std::path::Path) -> Result<PathBuf> {
     Ok(path)
 }
 
+#[cfg(target_os = "linux")]
+fn platform_service_logs(follow: bool, lines: u32) -> Result<()> {
+    let mut command = vec![
+        "journalctl".to_string(),
+        "--user".to_string(),
+        "-u".to_string(),
+        crate::service::SYSTEMD_UNIT_NAME.to_string(),
+        "-n".to_string(),
+        lines.to_string(),
+    ];
+    if follow {
+        command.push("-f".to_string());
+    } else {
+        command.push("--no-pager".to_string());
+    }
+    run_log_viewer(&command)
+}
+
 #[cfg(target_os = "macos")]
 fn install_platform_service(
     options: &ServiceOptions,
@@ -577,6 +599,18 @@ fn uninstall_platform_service(home: &std::path::Path) -> Result<PathBuf> {
 }
 
 #[cfg(target_os = "macos")]
+fn platform_service_logs(follow: bool, lines: u32) -> Result<()> {
+    let logs = home_dir()?.join(".pengepul/logs");
+    let mut command = vec!["tail".to_string(), "-n".to_string(), lines.to_string()];
+    if follow {
+        command.push("-f".to_string());
+    }
+    command.push(logs.join("service.log").to_string_lossy().into_owned());
+    command.push(logs.join("service.err.log").to_string_lossy().into_owned());
+    run_log_viewer(&command)
+}
+
+#[cfg(target_os = "macos")]
 fn current_uid() -> Result<u32> {
     let output = std::process::Command::new("id")
         .arg("-u")
@@ -615,6 +649,24 @@ fn platform_service_status() -> Result<String> {
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn uninstall_platform_service(_home: &std::path::Path) -> Result<PathBuf> {
     bail!("service uninstall is only supported on Linux and macOS")
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn platform_service_logs(_follow: bool, _lines: u32) -> Result<()> {
+    bail!("service logs are only supported on Linux and macOS")
+}
+
+fn run_log_viewer(command: &[String]) -> Result<()> {
+    let Some((program, args)) = command.split_first() else {
+        bail!("empty log command");
+    };
+    // Inherit stdio so logs stream to the terminal; the exit code is ignored because
+    // `journalctl -f` / `tail -f` exit non-zero when interrupted with Ctrl-C.
+    std::process::Command::new(program)
+        .args(args)
+        .status()
+        .with_context(|| format!("failed to run {program}"))?;
+    Ok(())
 }
 
 fn command_output(command: &[&str]) -> Result<String> {

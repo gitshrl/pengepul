@@ -131,9 +131,11 @@ pengepul service status
 pengepul service restart
 pengepul service stop
 pengepul service uninstall
+pengepul service logs
+pengepul service logs --follow
 ```
 
-Service install supports Linux systemd and macOS launchd. On Linux, use `--enable` to start the user service at login.
+Service install supports Linux systemd and macOS launchd. On Linux, use `--enable` to start the user service at login. It runs as a *user* service, so inspect it with `pengepul service status` and `pengepul service logs` rather than the system-scoped `systemctl status` / `journalctl -u` (which won't find a user unit).
 
 ## Development
 
@@ -157,13 +159,17 @@ git push origin v0.1.0
 
 ## Logging
 
-`serve` logs via `tracing`. The level follows the `debug` config key (`off`/`errors` log the
-startup banner and upstream errors at `info`; `verbose` adds per-request detail at `debug`).
-`RUST_LOG` overrides it, e.g.:
+`serve` logs via `tracing`. The default level is `info` — it logs the startup banner, the
+loaded account counts per provider, and upstream errors. Set the `debug` config key to
+`verbose` for per-request detail at `debug`. `RUST_LOG` overrides everything, e.g.:
 
 ```bash
 RUST_LOG=pengepul=debug pengepul serve
 ```
+
+For an installed service, read its logs with `pengepul service logs` (add `--follow` to
+stream, `--lines N` to change how much history is shown). On Linux this reads the user
+journal (`journalctl --user -u pengepul`).
 
 ## Routes
 

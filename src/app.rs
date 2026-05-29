@@ -415,6 +415,12 @@ fn build_account_managers(config: &Config) -> AccountManagers {
     let _ = anthropic.load();
     let _ = codex.load();
     let _ = opencode_go.load();
+    tracing::info!(
+        anthropic = anthropic.account_count(),
+        codex = codex.account_count(),
+        opencode_go = opencode_go.account_count(),
+        "loaded provider accounts"
+    );
     AccountManagers {
         anthropic: tokio::sync::Mutex::new(anthropic),
         codex: tokio::sync::Mutex::new(codex),
