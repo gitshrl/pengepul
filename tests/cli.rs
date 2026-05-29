@@ -30,6 +30,7 @@ struct FakeRuntime {
     install_request: Option<ServiceInstallRequest>,
     login_provider: Option<ProviderId>,
     login_manual: Option<bool>,
+    login_key: Option<String>,
 }
 
 impl CliRuntime for FakeRuntime {
@@ -100,9 +101,16 @@ impl CliRuntime for FakeRuntime {
         Ok("/tmp/pengepul.service".into())
     }
 
-    fn login(&mut self, _config: &Config, provider: ProviderId, manual: bool) -> Result<String> {
+    fn login(
+        &mut self,
+        _config: &Config,
+        provider: ProviderId,
+        manual: bool,
+        key: Option<&str>,
+    ) -> Result<String> {
         self.login_provider = Some(provider);
         self.login_manual = Some(manual);
+        self.login_key = key.map(ToOwned::to_owned);
         Ok(format!("{provider}@example.com"))
     }
 }
@@ -122,7 +130,7 @@ fn default_command_starts_server() {
     assert_eq!(outcome.code, 0);
     assert_eq!(runtime.server_host.as_deref(), Some("0.0.0.0"));
     assert_eq!(runtime.server_port, Some(8318));
-    assert_eq!(runtime.server_provider_count, 2);
+    assert_eq!(runtime.server_provider_count, 3);
     assert!(outcome.stderr.is_empty());
 }
 
@@ -325,5 +333,49 @@ fn login_delegates_provider_and_manual_mode() {
     assert_eq!(
         outcome.stdout.trim(),
         "saved codex account token for codex@example.com"
+    );
+}
+
+#[test]
+fn login_opencode_go_passes_key() {
+    let tmp = tempdir().expect("tempdir");
+    write_config(tmp.path(), "127.0.0.1", 8317);
+    let mut runtime = FakeRuntime::default();
+
+    let outcome = run(
+        &["login", "--provider", "opencode-go", "--key", "sk-go"],
+        tmp.path(),
+        &mut runtime,
+    );
+
+    assert_eq!(runtime.login_provider, Some(ProviderId::OpenCodeGo));
+    assert_eq!(runtime.login_key.as_deref(), Some("sk-go"));
+    assert_eq!(
+        outcome.stdout.trim(),
+        "saved opencode-go account token for opencode-go@example.com"
+    );
+}
+
+#[test]
+fn login_opencode_go_rejects_manual() {
+    let tmp = tempdir().expect("tempdir");
+    write_config(tmp.path(), "127.0.0.1", 8317);
+    let mut runtime = FakeRuntime::default();
+
+    let error = run_with_env(
+        &["login", "--provider", "opencode-go", "--manual"],
+        tmp.path(),
+        tmp.path(),
+        &mut runtime,
+    )
+    .expect_err("--manual with opencode-go should error");
+
+    assert!(
+        error.to_string().contains("manual"),
+        "unexpected error: {error}"
+    );
+    assert_eq!(
+        runtime.login_provider, None,
+        "runtime.login must not be called when args are rejected"
     );
 }

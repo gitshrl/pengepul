@@ -8,7 +8,7 @@ The implementation is intentionally narrow:
 
 - Claude models route to the Anthropic Messages API.
 - GPT models route to the Codex Responses backend.
-- Other upstream providers are not included yet.
+- `opencode-go/<model>` routes to OpenCode Go (OpenAI chat-completions) on `/v1/chat/completions`.
 
 ## Install
 
@@ -21,9 +21,7 @@ curl -L https://github.com/gitshrl/pengepul/releases/latest/download/pengepul-x8
 Release archives are published for:
 
 - `x86_64-unknown-linux-gnu`
-- `x86_64-apple-darwin`
 - `aarch64-apple-darwin`
-- `x86_64-pc-windows-msvc`
 
 Or install the command from source with Cargo:
 
@@ -58,6 +56,20 @@ Use manual mode when the browser callback cannot reach localhost:
 pengepul login --provider anthropic --manual
 pengepul login --provider codex --manual
 ```
+
+opencode-go uses a static API key instead of OAuth. With opencode installed and signed in,
+pengepul imports the key from its `auth.json`; otherwise pass it explicitly:
+
+```bash
+pengepul login --provider opencode-go
+pengepul login --provider opencode-go --key sk-...
+```
+
+Prefer the import path: a key passed via `--key` is visible in process listings (`ps`) and
+shell history, whereas the import reads it directly from opencode's stored credentials.
+
+Route opencode-go models with the `opencode-go/` prefix on `/v1/chat/completions`, e.g.
+`opencode-go/glm-5.1`. The available ids are listed by `GET /v1/models` once a key is loaded.
 
 Tokens are stored under `~/.pengepul` by default.
 
@@ -105,6 +117,8 @@ pengepul serve
 pengepul serve --host 127.0.0.1 --port 8318
 pengepul login --provider anthropic
 pengepul login --provider codex
+pengepul login --provider opencode-go
+pengepul login --provider opencode-go --key sk-...
 pengepul login --provider anthropic --manual
 pengepul login --provider codex --manual
 pengepul help

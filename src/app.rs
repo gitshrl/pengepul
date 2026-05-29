@@ -17,10 +17,12 @@ use futures_util::{Stream, StreamExt, TryStreamExt};
 use serde_json::{Value, json};
 use tower_http::cors::{Any, CorsLayer};
 
-use crate::accounts::{AccountManager, RefreshPolicy, RefreshPolicyKind};
+use crate::accounts::{AccountManager, RefreshFuture, RefreshPolicy, RefreshPolicyKind};
 use crate::config::Config;
 use crate::oauth::{refresh_anthropic_tokens, refresh_codex_tokens};
-use crate::providers::{ProviderRegistry, build_registry};
+use crate::providers::{
+    OPENCODE_GO_MODELS, ProviderRegistry, build_registry, strip_opencode_go_prefix,
+};
 use crate::streaming::{
     AnthropicStreamState, ChatStreamState, ResponsesStreamState, anthropic_sse_to_chat,
     anthropic_sse_to_responses, drain_complete_sse_events, finish_sse_events,
@@ -33,8 +35,9 @@ use crate::translate::{
 };
 use crate::types::{AvailableAccount, ProviderId, UsageData};
 use crate::upstream::{
-    ANTHROPIC_BASE_URL, CODEX_BASE_URL, CODEX_RESPONSES_PATH, anthropic_headers, apply_cloaking,
-    codex_headers, normalize_codex_responses_body,
+    ANTHROPIC_BASE_URL, CODEX_BASE_URL, CODEX_RESPONSES_PATH, OPENCODE_GO_BASE_URL,
+    anthropic_headers, apply_cloaking, codex_headers, normalize_codex_responses_body,
+    opencode_go_headers,
 };
 use crate::utils::now_iso;
 
@@ -72,6 +75,8 @@ pub trait UpstreamClient: Send + Sync {
     fn anthropic_count_tokens(&self, request: UpstreamRequest) -> UpstreamFuture;
     fn codex_responses(&self, request: UpstreamRequest) -> UpstreamFuture;
     fn codex_responses_stream(&self, request: UpstreamRequest) -> UpstreamSseFuture;
+    fn opencode_go_chat(&self, request: UpstreamRequest) -> UpstreamFuture;
+    fn opencode_go_chat_stream(&self, request: UpstreamRequest) -> UpstreamSseFuture;
 }
 
 #[derive(Clone)]
@@ -87,6 +92,7 @@ struct AppState {
 struct AccountManagers {
     anthropic: tokio::sync::Mutex<AccountManager>,
     codex: tokio::sync::Mutex<AccountManager>,
+    opencode_go: tokio::sync::Mutex<AccountManager>,
 }
 
 #[derive(Clone)]
@@ -306,6 +312,34 @@ impl UpstreamClient for HttpUpstreamClient {
             .await
         })
     }
+
+    fn opencode_go_chat(&self, request: UpstreamRequest) -> UpstreamFuture {
+        let client = self.client.clone();
+        Box::pin(async move {
+            send_json(
+                client,
+                format!("{OPENCODE_GO_BASE_URL}/chat/completions"),
+                opencode_go_headers(&request.account.token.access_token, false),
+                request.body,
+                request.config.timeouts.messages_ms,
+            )
+            .await
+        })
+    }
+
+    fn opencode_go_chat_stream(&self, request: UpstreamRequest) -> UpstreamSseFuture {
+        let client = self.client.clone();
+        Box::pin(async move {
+            send_stream(
+                client,
+                format!("{OPENCODE_GO_BASE_URL}/chat/completions"),
+                opencode_go_headers(&request.account.token.access_token, true),
+                request.body,
+                request.config.timeouts.stream_messages_ms,
+            )
+            .await
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -366,11 +400,25 @@ fn build_account_managers(config: &Config) -> AccountManagers {
             seconds: 8 * 24 * 60 * 60,
         },
     );
+    let mut opencode_go = AccountManager::new(
+        config.auth_dir.clone(),
+        ProviderId::OpenCodeGo,
+        |_refresh_token| {
+            Box::pin(async { anyhow::bail!("opencode-go API keys do not support refresh") })
+                as RefreshFuture
+        },
+        RefreshPolicy {
+            kind: RefreshPolicyKind::Never,
+            seconds: 0,
+        },
+    );
     let _ = anthropic.load();
     let _ = codex.load();
+    let _ = opencode_go.load();
     AccountManagers {
         anthropic: tokio::sync::Mutex::new(anthropic),
         codex: tokio::sync::Mutex::new(codex),
+        opencode_go: tokio::sync::Mutex::new(opencode_go),
     }
 }
 
@@ -385,6 +433,7 @@ async fn admin_accounts(State(state): State<AppState>, headers: HeaderMap) -> Re
 
     let anthropic = state.account_managers.anthropic.lock().await;
     let codex = state.account_managers.codex.lock().await;
+    let opencode_go = state.account_managers.opencode_go.lock().await;
     let providers = serde_json::Map::from_iter([
         (
             ProviderId::Anthropic.to_string(),
@@ -400,6 +449,13 @@ async fn admin_accounts(State(state): State<AppState>, headers: HeaderMap) -> Re
                 "account_count": codex.account_count()
             }),
         ),
+        (
+            ProviderId::OpenCodeGo.to_string(),
+            json!({
+                "accounts": opencode_go.snapshots(),
+                "account_count": opencode_go.account_count()
+            }),
+        ),
     ]);
 
     Json(json!({"providers": providers, "generated_at": now_iso()})).into_response()
@@ -412,12 +468,14 @@ async fn admin_reload(State(state): State<AppState>, headers: HeaderMap) -> Resp
 
     let anthropic = state.account_managers.anthropic.lock().await.reload();
     let codex = state.account_managers.codex.lock().await.reload();
-    let reloaded = match (anthropic, codex) {
-        (Ok(anthropic), Ok(codex)) => serde_json::Map::from_iter([
+    let opencode_go = state.account_managers.opencode_go.lock().await.reload();
+    let reloaded = match (anthropic, codex, opencode_go) {
+        (Ok(anthropic), Ok(codex), Ok(opencode_go)) => serde_json::Map::from_iter([
             (ProviderId::Anthropic.to_string(), anthropic),
             (ProviderId::Codex.to_string(), codex),
+            (ProviderId::OpenCodeGo.to_string(), opencode_go),
         ]),
-        (Err(error), _) | (_, Err(error)) => {
+        (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => {
             return AppError::simple(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("failed to reload accounts: {error}"),
@@ -443,7 +501,14 @@ async fn models(State(state): State<AppState>, headers: HeaderMap) -> Response {
         .account_count()
         > 0;
     let has_codex = state.account_managers.codex.lock().await.account_count() > 0;
-    let models = [
+    let has_opencode_go = state
+        .account_managers
+        .opencode_go
+        .lock()
+        .await
+        .account_count()
+        > 0;
+    let mut models = [
         (ProviderId::Anthropic, "claude-sonnet-4-6"),
         (ProviderId::Anthropic, "claude-opus-4-8"),
         (ProviderId::Codex, "gpt-5.4"),
@@ -452,6 +517,8 @@ async fn models(State(state): State<AppState>, headers: HeaderMap) -> Response {
     .filter(|(provider, _)| match provider {
         ProviderId::Anthropic => has_anthropic,
         ProviderId::Codex => has_codex,
+        // opencode-go has no entry in this seed list; its models are appended below.
+        ProviderId::OpenCodeGo => false,
     })
     .map(|(provider, id)| {
         json!({
@@ -462,6 +529,16 @@ async fn models(State(state): State<AppState>, headers: HeaderMap) -> Response {
         })
     })
     .collect::<Vec<_>>();
+    if has_opencode_go {
+        models.extend(OPENCODE_GO_MODELS.iter().map(|id| {
+            json!({
+                "id": format!("opencode-go/{id}"),
+                "object": "model",
+                "created": created,
+                "owned_by": ProviderId::OpenCodeGo.to_string()
+            })
+        }));
+    }
 
     Json(json!({"object": "list", "data": models})).into_response()
 }
@@ -518,10 +595,13 @@ async fn count_tokens(State(state): State<AppState>, headers: HeaderMap, body: B
     };
     let model = resolve_model(body.get("model").and_then(Value::as_str));
     let provider = state.registry.for_model(&model);
-    if provider.id == ProviderId::Codex {
+    if matches!(provider.id, ProviderId::Codex | ProviderId::OpenCodeGo) {
         return AppError::provider(
             StatusCode::NOT_IMPLEMENTED,
-            "count_tokens is not supported for the codex provider",
+            format!(
+                "count_tokens is not supported for the {} provider",
+                provider.id
+            ),
             "unsupported_endpoint_for_provider",
             provider.id,
         )
@@ -592,28 +672,43 @@ async fn route_provider_request(
             }
             Err(error) => return last_response.unwrap_or_else(|| error.into_response()),
         };
-        let response = if provider.id == ProviderId::Codex {
-            route_codex_request(
-                state,
-                headers,
-                body,
-                route,
-                &model,
-                &account,
-                client_wants_stream,
-            )
-            .await
-        } else {
-            route_anthropic_request(
-                state,
-                headers,
-                body,
-                route,
-                &model,
-                &account,
-                client_wants_stream,
-            )
-            .await
+        let response = match provider.id {
+            ProviderId::Codex => {
+                route_codex_request(
+                    state,
+                    headers,
+                    body,
+                    route,
+                    &model,
+                    &account,
+                    client_wants_stream,
+                )
+                .await
+            }
+            ProviderId::OpenCodeGo => {
+                route_opencode_go_request(
+                    state,
+                    headers,
+                    body,
+                    route,
+                    &model,
+                    &account,
+                    client_wants_stream,
+                )
+                .await
+            }
+            ProviderId::Anthropic => {
+                route_anthropic_request(
+                    state,
+                    headers,
+                    body,
+                    route,
+                    &model,
+                    &account,
+                    client_wants_stream,
+                )
+                .await
+            }
         };
         if !should_retry_upstream_status(response.status()) {
             return response;
@@ -641,11 +736,19 @@ async fn provider_account_count(state: &AppState, provider: ProviderId) -> usize
             .await
             .account_count(),
         ProviderId::Codex => state.account_managers.codex.lock().await.account_count(),
+        ProviderId::OpenCodeGo => state
+            .account_managers
+            .opencode_go
+            .lock()
+            .await
+            .account_count(),
     }
 }
 
 fn should_retry_upstream_status(status: StatusCode) -> bool {
-    matches!(status.as_u16(), 401 | 403 | 429 | 500..=599)
+    // 501 is pengepul's own "unsupported route for provider" response, not a transient
+    // upstream failure; retrying it would only re-generate the same error each pass.
+    matches!(status.as_u16(), 401 | 403 | 429 | 500 | 502..=599)
 }
 
 async fn route_codex_request(
@@ -744,6 +847,67 @@ async fn route_anthropic_request(
         }
         Err(error) => {
             upstream_failure_response(state, ProviderId::Anthropic, account, &error).await
+        }
+    }
+}
+
+async fn route_opencode_go_request(
+    state: &AppState,
+    headers: &HeaderMap,
+    body: &Value,
+    route: RequestRoute,
+    model: &str,
+    account: &AvailableAccount,
+    client_wants_stream: bool,
+) -> Response {
+    if !matches!(route, RequestRoute::Chat) {
+        return AppError::provider(
+            StatusCode::NOT_IMPLEMENTED,
+            "opencode-go models are only available on /v1/chat/completions",
+            "unsupported_endpoint_for_provider",
+            ProviderId::OpenCodeGo,
+        )
+        .into_response();
+    }
+    let body = opencode_go_request_body(body, model, client_wants_stream);
+    if client_wants_stream {
+        return match state
+            .upstream
+            .opencode_go_chat_stream(UpstreamRequest {
+                body,
+                request_headers: headers_to_map(headers),
+                account: account.clone(),
+                config: (*state.config).clone(),
+            })
+            .await
+        {
+            Ok(response) => {
+                let accounting =
+                    stream_accounting(state, ProviderId::OpenCodeGo, account, response.status)
+                        .await;
+                sse_upstream_response(response, ProviderId::OpenCodeGo, route, model, accounting)
+            }
+            Err(error) => {
+                upstream_failure_response(state, ProviderId::OpenCodeGo, account, &error).await
+            }
+        };
+    }
+    match state
+        .upstream
+        .opencode_go_chat(UpstreamRequest {
+            body,
+            request_headers: headers_to_map(headers),
+            account: account.clone(),
+            config: (*state.config).clone(),
+        })
+        .await
+    {
+        Ok(response) => {
+            record_json_result(state, ProviderId::OpenCodeGo, account, &response).await;
+            json_upstream_response(response, ProviderId::OpenCodeGo, route, model)
+        }
+        Err(error) => {
+            upstream_failure_response(state, ProviderId::OpenCodeGo, account, &error).await
         }
     }
 }
@@ -925,6 +1089,7 @@ async fn next_provider_account(
     let mut manager = match provider {
         ProviderId::Anthropic => state.account_managers.anthropic.lock().await,
         ProviderId::Codex => state.account_managers.codex.lock().await,
+        ProviderId::OpenCodeGo => state.account_managers.opencode_go.lock().await,
     };
     let result = manager.next_account_result();
     let Some(account) = result.account else {
@@ -973,6 +1138,7 @@ async fn record_provider_success(
     let mut manager = match provider {
         ProviderId::Anthropic => state.account_managers.anthropic.lock().await,
         ProviderId::Codex => state.account_managers.codex.lock().await,
+        ProviderId::OpenCodeGo => state.account_managers.opencode_go.lock().await,
     };
     manager.record_success(account.token.email.as_str(), usage.as_ref());
 }
@@ -987,6 +1153,7 @@ async fn record_provider_failure(
     let mut manager = match provider {
         ProviderId::Anthropic => state.account_managers.anthropic.lock().await,
         ProviderId::Codex => state.account_managers.codex.lock().await,
+        ProviderId::OpenCodeGo => state.account_managers.opencode_go.lock().await,
     };
     manager.record_failure(
         account.token.email.as_str(),
@@ -1025,6 +1192,9 @@ fn classify_status(status: StatusCode) -> &'static str {
     }
 }
 
+/// Extract token usage from a provider response, accepting both schema families:
+/// Anthropic-native (`input_tokens`, `cache_read_input_tokens`, …) and OpenAI-style
+/// (`prompt_tokens`/`completion_tokens` with `prompt_tokens_details`/`completion_tokens_details`).
 fn usage_from_response(body: &Value) -> Option<UsageData> {
     let usage = body.get("usage")?;
     let input_tokens = usage
@@ -1051,11 +1221,21 @@ fn usage_from_response(body: &Value) -> Option<UsageData> {
                     .get("input_tokens_details")
                     .and_then(|details| details.get("cached_tokens"))
             })
+            .or_else(|| {
+                usage
+                    .get("prompt_tokens_details")
+                    .and_then(|details| details.get("cached_tokens"))
+            })
             .and_then(Value::as_i64)
             .unwrap_or(0),
         reasoning_output_tokens: usage
             .get("output_tokens_details")
             .and_then(|details| details.get("reasoning_tokens"))
+            .or_else(|| {
+                usage
+                    .get("completion_tokens_details")
+                    .and_then(|details| details.get("reasoning_tokens"))
+            })
             .and_then(Value::as_i64)
             .unwrap_or(0),
     })
@@ -1086,7 +1266,8 @@ fn json_upstream_response(
             anthropic_to_responses(&response.body, model)
         }
         (ProviderId::Anthropic, RequestRoute::Messages)
-        | (ProviderId::Codex, RequestRoute::Responses) => response.body,
+        | (ProviderId::Codex, RequestRoute::Responses)
+        | (ProviderId::OpenCodeGo, _) => response.body,
         (ProviderId::Codex, RequestRoute::Chat) => {
             responses_to_chat_completion(&response.body, model)
         }
@@ -1252,6 +1433,7 @@ fn update_stream_usage(
     match provider {
         ProviderId::Anthropic => update_anthropic_stream_usage(event, &data, usage, completed),
         ProviderId::Codex => update_codex_stream_usage(event, &data, usage, completed),
+        ProviderId::OpenCodeGo => update_chat_stream_usage(&data, usage),
     }
 }
 
@@ -1302,6 +1484,16 @@ fn update_codex_stream_usage(
     }
 }
 
+fn update_chat_stream_usage(data: &Value, usage: &mut UsageData) {
+    // OpenAI chat chunks carry usage only when stream_options.include_usage is set; pengepul
+    // injects that for opencode-go streams. Completion is signalled by the `[DONE]` sentinel.
+    if data.get("usage").is_some_and(|value| !value.is_null())
+        && let Some(next_usage) = usage_from_response(data)
+    {
+        *usage = next_usage;
+    }
+}
+
 fn int_field_or(value: &Value, key: &str, default: i64) -> i64 {
     value.get(key).and_then(Value::as_i64).unwrap_or(default)
 }
@@ -1320,7 +1512,8 @@ fn transform_sse_event(
     if raw == "[DONE]" {
         return match (provider, route) {
             (ProviderId::Anthropic, RequestRoute::Messages)
-            | (ProviderId::Codex, RequestRoute::Responses) => vec!["data: [DONE]\n\n".to_string()],
+            | (ProviderId::Codex, RequestRoute::Responses)
+            | (ProviderId::OpenCodeGo, _) => vec!["data: [DONE]\n\n".to_string()],
             _ => Vec::new(),
         };
     }
@@ -1352,6 +1545,10 @@ fn transform_sse_event(
         (ProviderId::Codex, RequestRoute::Messages) => parsed.map_or_else(
             |_| Vec::new(),
             |data| responses_sse_to_anthropic(event, &data, anthropic_state),
+        ),
+        (ProviderId::OpenCodeGo, _) => parsed.map_or_else(
+            |_| vec![sse(&Value::String(raw.to_string()), None)],
+            |data| vec![sse(&data, None)],
         ),
     }
 }
@@ -1402,6 +1599,30 @@ fn codex_request_body(body: &Value, model: &str, route: RequestRoute) -> Value {
         object.remove("parallel_tool_calls");
     }
     normalized
+}
+
+/// Build the opencode-go chat/completions body: passthrough with the routing prefix stripped
+/// from `model`. On streaming, inject `stream_options.include_usage` so usage reaches accounting.
+fn opencode_go_request_body(body: &Value, model: &str, stream: bool) -> Value {
+    let bare_model = strip_opencode_go_prefix(model);
+    let mut next_body = body.clone();
+    if let Some(object) = next_body.as_object_mut() {
+        object.insert("model".to_string(), Value::String(bare_model.to_string()));
+        if stream {
+            object.insert("stream".to_string(), Value::Bool(true));
+            // Force usage reporting on so per-account accounting always sees it; a client
+            // cannot suppress it with include_usage:false or a malformed stream_options.
+            if let Some(options) = object
+                .get_mut("stream_options")
+                .and_then(Value::as_object_mut)
+            {
+                options.insert("include_usage".to_string(), Value::Bool(true));
+            } else {
+                object.insert("stream_options".to_string(), json!({"include_usage": true}));
+            }
+        }
+    }
+    next_body
 }
 
 /// Build a POST request with a JSON body and provider headers.
@@ -1657,6 +1878,39 @@ mod tests {
         fn codex_responses_stream(&self, _request: UpstreamRequest) -> UpstreamSseFuture {
             unreachable!("codex stream not used in refresh fallback test")
         }
+
+        fn opencode_go_chat(&self, request: UpstreamRequest) -> UpstreamFuture {
+            let model = request
+                .body
+                .get("model")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            self.calls
+                .lock()
+                .expect("calls lock")
+                .push(format!("opencode-go-chat:{model}"));
+            Box::pin(async {
+                Ok(UpstreamJsonResponse {
+                    status: StatusCode::OK,
+                    body: json!({
+                        "id": "chatcmpl_1",
+                        "object": "chat.completion",
+                        "model": "glm-5.1",
+                        "choices": [{
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "pong"},
+                            "finish_reason": "stop"
+                        }],
+                        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+                    }),
+                })
+            })
+        }
+
+        fn opencode_go_chat_stream(&self, _request: UpstreamRequest) -> UpstreamSseFuture {
+            unreachable!("opencode-go stream not used in passthrough test")
+        }
     }
 
     fn token(email: &str, access_token: &str, expires_at: &str) -> TokenData {
@@ -1765,61 +2019,8 @@ mod tests {
         )
         .expect("save bob");
 
-        let mut anthropic = AccountManager::new(
-            tmp.path().to_path_buf(),
-            ProviderId::Anthropic,
-            |_refresh_token| {
-                Box::pin(async {
-                    bail!("refresh failed");
-                }) as Pin<Box<dyn Future<Output = Result<TokenData>> + Send>>
-            },
-            RefreshPolicy::default(),
-        );
-        anthropic.load().expect("load anthropic accounts");
-        let codex = AccountManager::new(
-            tmp.path().to_path_buf(),
-            ProviderId::Codex,
-            |_refresh_token| {
-                Box::pin(async {
-                    bail!("unused refresh");
-                }) as Pin<Box<dyn Future<Output = Result<TokenData>> + Send>>
-            },
-            RefreshPolicy::default(),
-        );
         let upstream = Arc::new(CapturingUpstream::default());
-        let config = Config {
-            host: String::new(),
-            port: 8317,
-            auth_dir: tmp.path().to_path_buf(),
-            api_keys: std::collections::HashSet::new(),
-            body_limit: String::new(),
-            cloaking: CloakingConfig {
-                cli_version: "2.1.88".to_string(),
-                entrypoint: "cli".to_string(),
-                codex: std::collections::BTreeMap::new(),
-            },
-            timeouts: TimeoutConfig {
-                messages_ms: 120_000,
-                stream_messages_ms: 600_000,
-                count_tokens_ms: 30_000,
-            },
-            stats_enabled: true,
-            debug: DebugMode::Off,
-        };
-        let state = AppState {
-            config: Arc::new(config),
-            registry: Arc::new(build_registry(tmp.path())),
-            body_limit: BodyLimit::Unlimited,
-            upstream: upstream.clone(),
-            account_managers: Arc::new(AccountManagers {
-                anthropic: tokio::sync::Mutex::new(anthropic),
-                codex: tokio::sync::Mutex::new(codex),
-            }),
-            rate_limit_buckets: Arc::new(Mutex::new(std::collections::BTreeMap::<
-                String,
-                RateLimitBucket,
-            >::new())),
-        };
+        let state = opencode_go_state(tmp.path(), upstream.clone());
 
         let response = route_provider_request(
             &state,
@@ -1846,5 +2047,210 @@ mod tests {
             *upstream.calls.lock().expect("calls lock"),
             ["bob@example.com"]
         );
+    }
+
+    fn test_config(auth_dir: std::path::PathBuf) -> Config {
+        Config {
+            host: String::new(),
+            port: 8317,
+            auth_dir,
+            api_keys: std::collections::HashSet::new(),
+            body_limit: String::new(),
+            cloaking: CloakingConfig {
+                cli_version: "2.1.88".to_string(),
+                entrypoint: "cli".to_string(),
+                codex: std::collections::BTreeMap::new(),
+            },
+            timeouts: TimeoutConfig {
+                messages_ms: 120_000,
+                stream_messages_ms: 600_000,
+                count_tokens_ms: 30_000,
+            },
+            stats_enabled: true,
+            debug: DebugMode::Off,
+        }
+    }
+
+    fn manager(auth_dir: &std::path::Path, provider: ProviderId) -> AccountManager {
+        let mut manager = AccountManager::new(
+            auth_dir.to_path_buf(),
+            provider,
+            |_refresh_token| {
+                Box::pin(async {
+                    bail!("unused refresh");
+                }) as Pin<Box<dyn Future<Output = Result<TokenData>> + Send>>
+            },
+            RefreshPolicy::default(),
+        );
+        let _ = manager.load();
+        manager
+    }
+
+    fn opencode_go_token() -> TokenData {
+        TokenData {
+            access_token: "sk-opencode-go".to_string(),
+            refresh_token: String::new(),
+            email: "opencode-go-abc12345".to_string(),
+            expires_at: "9999-12-31T23:59:59Z".to_string(),
+            account_uuid: String::new(),
+            provider: ProviderId::OpenCodeGo,
+            id_token: None,
+            last_refresh_at: None,
+            plan_type: None,
+        }
+    }
+
+    fn opencode_go_state(tmp: &std::path::Path, upstream: Arc<CapturingUpstream>) -> AppState {
+        AppState {
+            config: Arc::new(test_config(tmp.to_path_buf())),
+            registry: Arc::new(build_registry(tmp)),
+            body_limit: BodyLimit::Unlimited,
+            upstream,
+            account_managers: Arc::new(AccountManagers {
+                anthropic: tokio::sync::Mutex::new(manager(tmp, ProviderId::Anthropic)),
+                codex: tokio::sync::Mutex::new(manager(tmp, ProviderId::Codex)),
+                opencode_go: tokio::sync::Mutex::new(manager(tmp, ProviderId::OpenCodeGo)),
+            }),
+            rate_limit_buckets: Arc::new(Mutex::new(std::collections::BTreeMap::<
+                String,
+                RateLimitBucket,
+            >::new())),
+        }
+    }
+
+    #[tokio::test]
+    async fn opencode_go_chat_strips_prefix_and_passes_through() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        save_token(tmp.path(), &opencode_go_token()).expect("save opencode-go token");
+        let upstream = Arc::new(CapturingUpstream::default());
+        let state = opencode_go_state(tmp.path(), upstream.clone());
+
+        let response = route_provider_request(
+            &state,
+            &HeaderMap::new(),
+            &json!({
+                "model": "opencode-go/glm-5.1",
+                "messages": [{"role": "user", "content": "hi"}]
+            }),
+            RequestRoute::Chat,
+        )
+        .await;
+        let status = response.status();
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let body = serde_json::from_slice::<Value>(&body).expect("json body");
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["choices"][0]["message"]["content"], "pong");
+        // upstream received the bare model id, not the routing prefix.
+        assert_eq!(
+            *upstream.calls.lock().expect("calls lock"),
+            ["opencode-go-chat:glm-5.1"]
+        );
+    }
+
+    #[tokio::test]
+    async fn opencode_go_messages_route_is_unsupported() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        save_token(tmp.path(), &opencode_go_token()).expect("save opencode-go token");
+        let upstream = Arc::new(CapturingUpstream::default());
+        let state = opencode_go_state(tmp.path(), upstream.clone());
+
+        let response = route_provider_request(
+            &state,
+            &HeaderMap::new(),
+            &json!({
+                "model": "opencode-go/glm-5.1",
+                "messages": [{"role": "user", "content": "hi"}]
+            }),
+            RequestRoute::Messages,
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+        assert!(upstream.calls.lock().expect("calls lock").is_empty());
+    }
+
+    #[test]
+    fn usage_from_response_reads_openai_chat_details() {
+        let usage = super::usage_from_response(&json!({
+            "usage": {
+                "prompt_tokens": 89,
+                "completion_tokens": 26,
+                "prompt_tokens_details": {"cached_tokens": 7},
+                "completion_tokens_details": {"reasoning_tokens": 23}
+            }
+        }))
+        .expect("usage");
+        assert_eq!(usage.input_tokens, 89);
+        assert_eq!(usage.output_tokens, 26);
+        assert_eq!(usage.cache_read_input_tokens, 7);
+        assert_eq!(usage.reasoning_output_tokens, 23);
+    }
+
+    #[test]
+    fn does_not_retry_locally_generated_not_implemented() {
+        // 501 is pengepul's own deterministic "unsupported route" response, never a
+        // transient upstream signal, so retrying it just re-generates the same error.
+        assert!(!super::should_retry_upstream_status(
+            StatusCode::NOT_IMPLEMENTED
+        ));
+        assert!(super::should_retry_upstream_status(
+            StatusCode::TOO_MANY_REQUESTS
+        ));
+        assert!(super::should_retry_upstream_status(
+            StatusCode::INTERNAL_SERVER_ERROR
+        ));
+        assert!(super::should_retry_upstream_status(StatusCode::BAD_GATEWAY));
+        assert!(!super::should_retry_upstream_status(StatusCode::OK));
+    }
+
+    #[test]
+    fn opencode_go_request_body_strips_prefix_and_injects_usage() {
+        let streamed = super::opencode_go_request_body(
+            &json!({"model": "opencode-go/glm-5.1", "messages": []}),
+            "opencode-go/glm-5.1",
+            true,
+        );
+        assert_eq!(streamed["model"], "glm-5.1");
+        assert_eq!(streamed["stream_options"]["include_usage"], true);
+
+        // an existing stream_options object is preserved, include_usage filled in.
+        let preserved = super::opencode_go_request_body(
+            &json!({"model": "opencode-go/glm-5.1", "stream_options": {"foo": 1}}),
+            "opencode-go/glm-5.1",
+            true,
+        );
+        assert_eq!(preserved["stream_options"]["foo"], 1);
+        assert_eq!(preserved["stream_options"]["include_usage"], true);
+
+        // a client cannot suppress usage accounting: include_usage is forced true.
+        let suppressed = super::opencode_go_request_body(
+            &json!({"model": "opencode-go/glm-5.1", "stream_options": {"include_usage": false}}),
+            "opencode-go/glm-5.1",
+            true,
+        );
+        assert_eq!(suppressed["stream_options"]["include_usage"], true);
+
+        // a non-object stream_options is replaced so injection cannot silently no-op.
+        let malformed = super::opencode_go_request_body(
+            &json!({"model": "opencode-go/glm-5.1", "stream_options": "oops"}),
+            "opencode-go/glm-5.1",
+            true,
+        );
+        assert_eq!(malformed["stream_options"]["include_usage"], true);
+
+        // non-stream requests are left without stream_options.
+        let non_stream = super::opencode_go_request_body(
+            &json!({"model": "opencode-go/kimi-k2.6"}),
+            "opencode-go/kimi-k2.6",
+            false,
+        );
+        assert_eq!(non_stream["model"], "kimi-k2.6");
+        assert!(non_stream.get("stream_options").is_none());
     }
 }
