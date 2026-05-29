@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 pub enum ProviderId {
     Anthropic,
     Codex,
+    OpenCodeGo,
 }
 
 impl ProviderId {
@@ -16,6 +17,7 @@ impl ProviderId {
         match self {
             Self::Anthropic => "claude",
             Self::Codex => "codex",
+            Self::OpenCodeGo => "opencodego",
         }
     }
 }
@@ -25,6 +27,7 @@ impl fmt::Display for ProviderId {
         match self {
             Self::Anthropic => formatter.write_str("anthropic"),
             Self::Codex => formatter.write_str("codex"),
+            Self::OpenCodeGo => formatter.write_str("opencode-go"),
         }
     }
 }
@@ -36,6 +39,7 @@ impl FromStr for ProviderId {
         match value {
             "anthropic" | "claude" => Ok(Self::Anthropic),
             "codex" => Ok(Self::Codex),
+            "opencode-go" | "opencodego" => Ok(Self::OpenCodeGo),
             other => Err(format!("unknown provider: {other}")),
         }
     }
@@ -103,3 +107,23 @@ impl fmt::Display for RefreshTokenExhaustedError {
 }
 
 impl std::error::Error for RefreshTokenExhaustedError {}
+
+#[cfg(test)]
+mod tests {
+    use super::ProviderId;
+
+    #[test]
+    fn provider_id_parses_and_displays() {
+        assert_eq!(
+            "opencode-go".parse::<ProviderId>(),
+            Ok(ProviderId::OpenCodeGo)
+        );
+        assert_eq!(
+            "opencodego".parse::<ProviderId>(),
+            Ok(ProviderId::OpenCodeGo)
+        );
+        assert_eq!(ProviderId::OpenCodeGo.to_string(), "opencode-go");
+        assert_eq!(ProviderId::OpenCodeGo.storage_prefix(), "opencodego");
+        assert!("nope".parse::<ProviderId>().is_err());
+    }
+}

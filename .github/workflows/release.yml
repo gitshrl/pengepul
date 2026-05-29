@@ -56,15 +56,9 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             archive: tar.gz
-          - os: macos-13
-            target: x86_64-apple-darwin
-            archive: tar.gz
           - os: macos-14
             target: aarch64-apple-darwin
             archive: tar.gz
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            archive: zip
 
     steps:
       - name: checkout
@@ -79,8 +73,7 @@ jobs:
       - name: build release binary
         run: cargo build --locked --release --target ${{ matrix.target }}
 
-      - name: package unix archive
-        if: runner.os != 'Windows'
+      - name: package archive
         shell: bash
         env:
           TARGET: ${{ matrix.target }}
@@ -95,22 +88,6 @@ jobs:
           cp README.md "${package_dir}/README.md"
           tar -czf "dist/${archive}" "${package_dir}"
           shasum -a 256 "dist/${archive}" | sed 's#dist/##' > "dist/${archive}.sha256"
-
-      - name: package windows archive
-        if: runner.os == 'Windows'
-        shell: pwsh
-        env:
-          TARGET: ${{ matrix.target }}
-          TAG: ${{ github.ref_name }}
-        run: |
-          $packageDir = "pengepul-$env:TAG-$env:TARGET"
-          $archive = "pengepul-$env:TARGET.zip"
-          New-Item -ItemType Directory -Force -Path dist, $packageDir | Out-Null
-          Copy-Item "target/$env:TARGET/release/pengepul.exe" "$packageDir/pengepul.exe"
-          Copy-Item README.md "$packageDir/README.md"
-          Compress-Archive -Path $packageDir -DestinationPath "dist/$archive" -Force
-          $hash = (Get-FileHash -Algorithm SHA256 "dist/$archive").Hash.ToLowerInvariant()
-          "$hash  $archive" | Out-File -FilePath "dist/$archive.sha256" -Encoding ascii
 
       - name: upload release assets
         uses: actions/upload-artifact@v7.0.1
