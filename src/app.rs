@@ -1487,10 +1487,7 @@ fn decode_upstream_body(headers: &HeaderMap, bytes: &[u8], model: &str) -> Value
         .get(CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .unwrap_or("");
-    if content_type
-        .to_ascii_lowercase()
-        .starts_with("text/event-stream")
-    {
+    if is_event_stream_content_type(content_type) || looks_like_event_stream_body(bytes) {
         return responses_sse_to_payload(&[bytes], model).unwrap_or_else(|error| {
             json!({
                 "error": {
@@ -1506,6 +1503,19 @@ fn decode_upstream_body(headers: &HeaderMap, bytes: &[u8], model: &str) -> Value
                 "message": String::from_utf8_lossy(bytes)
             }
         })
+    })
+}
+
+fn is_event_stream_content_type(content_type: &str) -> bool {
+    content_type
+        .to_ascii_lowercase()
+        .starts_with("text/event-stream")
+}
+
+fn looks_like_event_stream_body(bytes: &[u8]) -> bool {
+    std::str::from_utf8(bytes).is_ok_and(|body| {
+        let body = body.trim_start();
+        body.starts_with("event:") || body.starts_with("data:")
     })
 }
 
@@ -1669,6 +1679,30 @@ mod tests {
         headers.insert(
             axum::http::header::CONTENT_TYPE,
             axum::http::HeaderValue::from_static("text/event-stream; charset=utf-8"),
+        );
+
+        let body = decode_upstream_body(
+            &headers,
+            concat!(
+                "event: response.output_text.delta\n",
+                "data: {\"delta\":\"ok\"}\n\n",
+                "event: response.completed\n",
+                "data: {\"response\":{\"id\":\"resp_1\",\"object\":\"response\",\"status\":\"completed\",\"model\":\"gpt-5.4\"}}\n\n"
+            )
+            .as_bytes(),
+            "gpt-5.4",
+        );
+
+        assert_eq!(body["id"], "resp_1");
+        assert_eq!(body["output_text"], "ok");
+    }
+
+    #[test]
+    fn decode_upstream_body_drains_event_stream_payloads_without_event_stream_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::CONTENT_TYPE,
+            axum::http::HeaderValue::from_static("application/json"),
         );
 
         let body = decode_upstream_body(
