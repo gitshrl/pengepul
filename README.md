@@ -2,13 +2,7 @@
 
 ## About
 
-`pengepul` is a relay for Claude and Codex accounts. It exposes familiar API routes while routing requests to the matching upstream provider, rotating account tokens, refreshing credentials, and translating request/response shapes where needed.
-
-The implementation is intentionally narrow:
-
-- Claude models route to the Anthropic Messages API.
-- GPT models route to the Codex Responses backend.
-- `opencode-go/<model>` routes to OpenCode Go (OpenAI chat-completions) on `/v1/chat/completions`.
+`pengepul` is a relay for upstream AI provider accounts. It exposes familiar API routes while routing each request to the matching provider, rotating account tokens, refreshing credentials, and translating request/response shapes where needed.
 
 ## Install
 
