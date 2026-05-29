@@ -29,10 +29,10 @@ For local development from this checkout:
 cargo install --path . --locked --force
 ```
 
-This repository is pinned to Rust 1.95.0 through `rust-toolchain.toml`.
+This repository is pinned to Rust 1.96.0 through `rust-toolchain.toml`.
 
 ```bash
-rustup toolchain install 1.95.0
+rustup toolchain install 1.96.0
 ```
 
 ## Login
