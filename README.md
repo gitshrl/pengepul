@@ -278,6 +278,25 @@ curl -sS http://127.0.0.1:8317/v1/responses \
   }'
 ```
 
+opencode-go chat completion. Route the model with the `opencode-go/` prefix; list the
+available ids with `GET /v1/models` once a key is loaded:
+
+```bash
+curl -sS http://127.0.0.1:8317/v1/chat/completions \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "opencode-go/glm-5.1",
+    "max_tokens": 32,
+    "messages": [
+      {
+        "role": "user",
+        "content": "reply exactly: pong"
+      }
+    ]
+  }'
+```
+
 ## Behavior
 
 - Account selection is round-robin with short sticky windows.
