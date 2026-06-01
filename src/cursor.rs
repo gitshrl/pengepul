@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
+use std::io::Read as _;
 
+use flate2::read::GzDecoder;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -421,6 +423,132 @@ pub(crate) fn cursor_headers(account: &AvailableAccount, _config: &Config) -> BT
     ])
 }
 
+#[derive(Debug, Default, Clone)]
+pub(crate) struct CursorDecoded {
+    pub text: String,
+    pub reasoning: String,
+    pub error: Option<String>,
+}
+
+struct Frame {
+    kind: u8,
+    payload: Vec<u8>,
+}
+
+fn read_connect_frames(data: &[u8]) -> Vec<Frame> {
+    let mut frames = Vec::new();
+    let mut pos = 0;
+    while pos + 5 <= data.len() {
+        let kind = data[pos];
+        let len = u32::from_be_bytes([data[pos + 1], data[pos + 2], data[pos + 3], data[pos + 4]])
+            as usize;
+        pos += 5;
+        if pos + len > data.len() {
+            break;
+        }
+        let mut payload = data[pos..pos + len].to_vec();
+        pos += len;
+        if kind == 1 || kind == 3 {
+            let mut decoded = Vec::new();
+            if GzDecoder::new(&payload[..]).read_to_end(&mut decoded).is_ok() {
+                payload = decoded;
+            }
+        }
+        frames.push(Frame { kind, payload });
+    }
+    frames
+}
+
+fn is_printable(text: &str) -> bool {
+    !text.is_empty()
+        && text.chars().all(|c| {
+            c == '\t' || c == '\n' || c == '\r' || (' '..='~').contains(&c) || c >= '\u{a0}'
+        })
+}
+
+fn is_uuid_like(text: &str) -> bool {
+    let t = text.trim();
+    t.len() >= 32 && t.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-')
+}
+
+fn looks_like_proto_start(byte: u8) -> bool {
+    let wire = byte & 0x07;
+    byte != 0 && matches!(wire, 0 | 1 | 2 | 5)
+}
+
+fn extract_inner_text(payload: &[u8], depth: u8) -> String {
+    if depth > 4 {
+        return String::new();
+    }
+    let fields = parse_fields(payload);
+    if let Some(bytes) = field_bytes(&fields, 1) {
+        let text = String::from_utf8_lossy(bytes).to_string();
+        if is_printable(&text) && !is_uuid_like(&text) {
+            return text;
+        }
+    }
+    let mut acc = String::new();
+    for f in &fields {
+        if let Some(bytes) = &f.bytes
+            && bytes.len() > 1
+            && looks_like_proto_start(bytes[0])
+        {
+            acc.push_str(&extract_inner_text(bytes, depth + 1));
+        }
+    }
+    acc
+}
+
+fn extract_from_payload(payload: &[u8], text: &mut String, reasoning: &mut String) {
+    for f in parse_fields(payload) {
+        let Some(bytes) = f.bytes else { continue };
+        if f.field == 25 {
+            reasoning.push_str(&extract_inner_text(&bytes, 0));
+        } else if f.field == 1 {
+            let direct = String::from_utf8_lossy(&bytes).to_string();
+            if is_printable(&direct) && !is_uuid_like(&direct) {
+                text.push_str(&direct);
+            }
+        } else if (f.field == 2 || bytes.len() > 1) && looks_like_proto_start(bytes[0]) {
+            extract_from_payload(&bytes, text, reasoning);
+        }
+    }
+}
+
+fn extract_json_error(payload: &[u8]) -> Option<String> {
+    let v: Value = serde_json::from_slice(payload).ok()?;
+    let err = v.get("error")?;
+    let code = err.get("code").and_then(Value::as_str);
+    let message = err.get("message").and_then(Value::as_str);
+    (code.is_some() || message.is_some())
+        .then(|| [code, message].into_iter().flatten().collect::<Vec<_>>().join(" — "))
+}
+
+#[must_use]
+pub(crate) fn decode_cursor_response(data: &[u8]) -> CursorDecoded {
+    let mut out = CursorDecoded::default();
+    for frame in read_connect_frames(data) {
+        if frame.kind == 0 || frame.kind == 1 {
+            extract_from_payload(&frame.payload, &mut out.text, &mut out.reasoning);
+        } else if (frame.kind == 2 || frame.kind == 3)
+            && let Some(err) = extract_json_error(&frame.payload)
+        {
+            out.error = Some(err);
+        }
+    }
+    // composer/kimi: full answer follows `</think>` inside the reasoning channel
+    if out.text.is_empty()
+        && let Some(idx) = out.reasoning.to_lowercase().find("</think>")
+    {
+        let after = idx + "</think>".len();
+        out.text = out.reasoning[after..].trim_start().to_string();
+        out.reasoning = out.reasoning[..idx].to_string();
+    }
+    out.text = out.text.trim().to_string();
+    out.reasoning = out.reasoning.trim().to_string();
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -494,5 +622,36 @@ mod tests {
         assert!(checksum.ends_with("machine-1"), "{checksum}");
         let prefix = &checksum[..checksum.len() - "machine-1".len()];
         assert!(prefix.bytes().all(|b| URL_SAFE_BASE64.contains(&b)), "{prefix}");
+    }
+
+    #[test]
+    fn decodes_text_from_connect_frames() {
+        // inner message: field 1 = "hello"
+        let mut inner = Vec::new();
+        encode_bytes_field(1, b"hello", &mut inner);
+        // outer stream message: field 2 = inner
+        let mut outer = Vec::new();
+        encode_bytes_field(2, &inner, &mut outer);
+        let frame = connect_frame(&outer);
+        let decoded = decode_cursor_response(&frame);
+        assert_eq!(decoded.text, "hello");
+    }
+
+    #[test]
+    fn decodes_gzipped_frame() {
+        use flate2::{Compression, write::GzEncoder};
+        use std::io::Write as _;
+        let mut inner = Vec::new();
+        encode_bytes_field(1, b"zipped", &mut inner);
+        let mut payload = Vec::new();
+        encode_bytes_field(2, &inner, &mut payload);
+        let mut enc = GzEncoder::new(Vec::new(), Compression::default());
+        enc.write_all(&payload).unwrap();
+        let gz = enc.finish().unwrap();
+        // frame kind 1 = compressed
+        let mut frame = vec![1u8];
+        frame.extend_from_slice(&u32::try_from(gz.len()).unwrap().to_be_bytes());
+        frame.extend_from_slice(&gz);
+        assert_eq!(decode_cursor_response(&frame).text, "zipped");
     }
 }
