@@ -210,6 +210,100 @@ pub(crate) fn messages_from_body(body: &Value) -> Vec<ChatMessage> {
     turns
 }
 
+fn encode_chat_message(content: &str, role: u32, message_id: &str) -> Vec<u8> {
+    let mut out = Vec::new();
+    encode_bytes_field(1, content.as_bytes(), &mut out);
+    encode_varint_field(2, role, &mut out);
+    encode_bytes_field(13, message_id.as_bytes(), &mut out);
+    encode_varint_field(47, 2, &mut out); // chat mode enum
+    out
+}
+
+fn encode_message_id(message_id: &str, role: u32) -> Vec<u8> {
+    let mut out = Vec::new();
+    encode_bytes_field(1, message_id.as_bytes(), &mut out);
+    encode_varint_field(3, role, &mut out);
+    out
+}
+
+fn encode_model_msg(model: &str) -> Vec<u8> {
+    let mut out = Vec::new();
+    encode_bytes_field(1, model.as_bytes(), &mut out);
+    encode_bytes_field(4, &[], &mut out);
+    out
+}
+
+fn encode_cursor_setting() -> Vec<u8> {
+    let mut unknown6 = Vec::new();
+    encode_bytes_field(1, &[], &mut unknown6);
+    encode_bytes_field(2, &[], &mut unknown6);
+    let mut out = Vec::new();
+    encode_bytes_field(1, b"cursor\\aisettings", &mut out);
+    encode_bytes_field(3, &[], &mut out);
+    encode_bytes_field(6, &unknown6, &mut out);
+    encode_varint_field(8, 1, &mut out);
+    encode_varint_field(9, 1, &mut out);
+    out
+}
+
+fn encode_metadata() -> Vec<u8> {
+    let mut out = Vec::new();
+    encode_bytes_field(1, std::env::consts::OS.as_bytes(), &mut out);
+    encode_bytes_field(2, std::env::consts::ARCH.as_bytes(), &mut out);
+    encode_bytes_field(3, env!("CARGO_PKG_VERSION").as_bytes(), &mut out);
+    encode_bytes_field(4, b"pengepul", &mut out);
+    encode_bytes_field(5, chrono::Utc::now().to_rfc3339().as_bytes(), &mut out);
+    out
+}
+
+#[must_use]
+pub(crate) fn encode_cursor_chat_request(body: &Value) -> Vec<u8> {
+    let model = normalize_model(body.get("model").and_then(Value::as_str).unwrap_or("cursor/"));
+    let messages = messages_from_body(body);
+    let conversation_id = uuid::Uuid::new_v4().to_string();
+    let mut entries: Vec<(String, u32)> = Vec::new();
+
+    let mut request = Vec::new();
+    for msg in &messages {
+        let role = if msg.role == Role::Assistant { 2 } else { 1 };
+        let id = uuid::Uuid::new_v4().to_string();
+        entries.push((id.clone(), role));
+        let message = encode_chat_message(&msg.content, role, &id);
+        encode_bytes_field(1, &message, &mut request);
+    }
+    encode_varint_field(2, 1, &mut request);
+    encode_bytes_field(3, &[], &mut request);
+    encode_varint_field(4, 1, &mut request);
+    let model_msg = encode_model_msg(&model);
+    encode_bytes_field(5, &model_msg, &mut request);
+    encode_bytes_field(8, b"", &mut request);
+    encode_varint_field(13, 1, &mut request);
+    let setting = encode_cursor_setting();
+    encode_bytes_field(15, &setting, &mut request);
+    encode_varint_field(19, 1, &mut request);
+    encode_bytes_field(23, conversation_id.as_bytes(), &mut request);
+    let metadata = encode_metadata();
+    encode_bytes_field(26, &metadata, &mut request);
+    encode_varint_field(27, 1, &mut request);
+    for (id, role) in &entries {
+        let msg_id = encode_message_id(id, *role);
+        encode_bytes_field(30, &msg_id, &mut request);
+    }
+    encode_varint_field(35, 0, &mut request);
+    encode_varint_field(38, 0, &mut request);
+    encode_varint_field(46, 2, &mut request);
+    encode_bytes_field(47, b"", &mut request);
+    encode_varint_field(48, 0, &mut request);
+    encode_varint_field(49, 0, &mut request);
+    encode_varint_field(51, 0, &mut request);
+    encode_varint_field(53, 1, &mut request);
+    encode_bytes_field(54, b"agent", &mut request);
+
+    let mut wrapped = Vec::new();
+    encode_bytes_field(1, &request, &mut wrapped);
+    connect_frame(&wrapped)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -256,5 +350,24 @@ mod tests {
         assert_eq!(normalize_model("cursor/composer-2.5"), "composer-2.5");
         assert_eq!(normalize_model("cursor/foo"), "foo");
         assert_eq!(normalize_model("cursor/"), "composer-2.5");
+    }
+
+    #[test]
+    fn encodes_chat_request_with_model_and_messages() {
+        let body = serde_json::json!({"model": "cursor/composer-2.5", "input": "hello"});
+        let frame = encode_cursor_chat_request(&body);
+        // strip the 5-byte connect envelope
+        assert_eq!(frame[0], 0);
+        let len = u32::from_be_bytes([frame[1], frame[2], frame[3], frame[4]]) as usize;
+        let payload = &frame[5..5 + len];
+        // outer wrapper: field 1 = request message
+        let outer = parse_fields(payload);
+        let request = field_bytes(&outer, 1).expect("request field");
+        let req_fields = parse_fields(request);
+        // field 5 = model message, which contains field 1 = model name
+        let model_msg = field_bytes(&req_fields, 5).expect("model field");
+        let model_fields = parse_fields(model_msg);
+        let model_name = field_bytes(&model_fields, 1).expect("model name");
+        assert_eq!(model_name, b"composer-2.5");
     }
 }
