@@ -85,8 +85,10 @@ pub(crate) fn parse_fields(data: &[u8]) -> Vec<RawField> {
             2 => {
                 let (len, after_len) = decode_varint(data, pos);
                 pos = after_len;
-                let len = usize::try_from(len).unwrap_or(usize::MAX);
-                if pos + len > data.len() {
+                let Ok(len) = usize::try_from(len) else {
+                    break; // length that cannot fit usize is malformed input
+                };
+                if len > data.len() - pos {
                     break;
                 }
                 out.push(RawField {
@@ -442,7 +444,7 @@ fn read_connect_frames(data: &[u8]) -> Vec<Frame> {
         let len = u32::from_be_bytes([data[pos + 1], data[pos + 2], data[pos + 3], data[pos + 4]])
             as usize;
         pos += 5;
-        if pos + len > data.len() {
+        if len > data.len() - pos {
             break;
         }
         let mut payload = data[pos..pos + len].to_vec();
@@ -508,7 +510,9 @@ fn extract_from_payload(payload: &[u8], text: &mut String, reasoning: &mut Strin
             if is_printable(&direct) && !is_uuid_like(&direct) {
                 text.push_str(&direct);
             }
-        } else if (f.field == 2 || bytes.len() > 1) && looks_like_proto_start(bytes[0]) {
+        } else if (f.field == 2 || bytes.len() > 1)
+            && bytes.first().is_some_and(|&b| looks_like_proto_start(b))
+        {
             extract_from_payload(&bytes, text, reasoning);
         }
     }
@@ -523,6 +527,21 @@ fn extract_json_error(payload: &[u8]) -> Option<String> {
         .then(|| [code, message].into_iter().flatten().collect::<Vec<_>>().join(" — "))
 }
 
+/// Byte index of the first case-insensitive match of an ASCII `needle` in `haystack`.
+///
+/// `needle` must be ASCII. The returned index (and `index + needle.len()`) are valid char
+/// boundaries in `haystack` because every matched byte is ASCII, so slicing there never panics —
+/// unlike searching a `to_lowercase()` copy, whose byte offsets need not map back to the original.
+fn find_ascii_ci(haystack: &str, needle: &str) -> Option<usize> {
+    let hay = haystack.as_bytes();
+    let need = needle.as_bytes();
+    if need.is_empty() || hay.len() < need.len() {
+        return None;
+    }
+    (0..=hay.len() - need.len())
+        .find(|&i| hay[i..i + need.len()].eq_ignore_ascii_case(need))
+}
+
 #[must_use]
 pub(crate) fn decode_cursor_response(data: &[u8]) -> CursorDecoded {
     let mut out = CursorDecoded::default();
@@ -535,9 +554,11 @@ pub(crate) fn decode_cursor_response(data: &[u8]) -> CursorDecoded {
             out.error = Some(err);
         }
     }
-    // composer/kimi: full answer follows `</think>` inside the reasoning channel
+    // composer/kimi: full answer follows `</think>` inside the reasoning channel.
+    // Search the original string case-insensitively (not `to_lowercase()`, whose byte length can
+    // differ from the original for some Unicode, yielding a non-char-boundary slice index).
     if out.text.is_empty()
-        && let Some(idx) = out.reasoning.to_lowercase().find("</think>")
+        && let Some(idx) = find_ascii_ci(&out.reasoning, "</think>")
     {
         let after = idx + "</think>".len();
         out.text = out.reasoning[after..].trim_start().to_string();
@@ -706,6 +727,30 @@ mod tests {
         frame.extend_from_slice(&u32::try_from(gz.len()).unwrap().to_be_bytes());
         frame.extend_from_slice(&gz);
         assert_eq!(decode_cursor_response(&frame).text, "zipped");
+    }
+
+    #[test]
+    fn decode_skips_empty_length_delimited_field_without_panic() {
+        // A zero-length field-2 entry must not panic on bytes[0] indexing.
+        let mut payload = Vec::new();
+        encode_bytes_field(2, &[], &mut payload);
+        encode_bytes_field(1, b"answer", &mut payload);
+        let frame = connect_frame(&payload);
+        assert_eq!(decode_cursor_response(&frame).text, "answer");
+    }
+
+    #[test]
+    fn think_split_is_unicode_safe() {
+        // 'İ' lowercases to two chars; a to_lowercase()-based index would mis-slice (or split a
+        // char boundary of) the original reasoning. find_ascii_ci must split correctly.
+        let mut inner = Vec::new();
+        encode_bytes_field(1, "İ思考</think>done".as_bytes(), &mut inner);
+        let mut payload = Vec::new();
+        encode_bytes_field(25, &inner, &mut payload);
+        let frame = connect_frame(&payload);
+        let decoded = decode_cursor_response(&frame);
+        assert_eq!(decoded.text, "done");
+        assert_eq!(decoded.reasoning, "İ思考");
     }
 
     #[test]
