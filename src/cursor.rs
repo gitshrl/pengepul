@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::io::Read as _;
 
 use flate2::read::GzDecoder;
-use serde_json::Value;
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::config::Config;
@@ -549,6 +549,58 @@ pub(crate) fn decode_cursor_response(data: &[u8]) -> CursorDecoded {
     out
 }
 
+#[must_use]
+pub(crate) fn synth_responses_json(decoded: &CursorDecoded, model: &str) -> Value {
+    json!({
+        "id": format!("resp_{}", uuid::Uuid::new_v4().simple()),
+        "object": "response",
+        "model": model,
+        "status": "completed",
+        "output": [{
+            "type": "message",
+            "role": "assistant",
+            "content": [{ "type": "output_text", "text": decoded.text }]
+        }],
+        "usage": { "input_tokens": 0, "output_tokens": 0, "total_tokens": 0 }
+    })
+}
+
+fn sse_event(event: &str, data: &Value) -> String {
+    format!("event: {event}\ndata: {data}\n\n")
+}
+
+/// Build the full Responses-API SSE sequence for one decoded response. Used by the non-incremental
+/// test path and as the template for the streaming decoder's per-chunk emission.
+#[must_use]
+pub(crate) fn responses_sse_from_decoded(text: &str, reasoning: &str, model: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    out.push(sse_event(
+        "response.created",
+        &json!({"type": "response.created",
+            "response": {"id": "resp_stream", "object": "response", "model": model, "status": "in_progress", "output": []}}),
+    ));
+    if !reasoning.is_empty() {
+        out.push(sse_event(
+            "response.reasoning_text.delta",
+            &json!({"type": "response.reasoning_text.delta", "delta": reasoning}),
+        ));
+    }
+    if !text.is_empty() {
+        out.push(sse_event(
+            "response.output_text.delta",
+            &json!({"type": "response.output_text.delta", "delta": text}),
+        ));
+    }
+    out.push(sse_event(
+        "response.completed",
+        &json!({"type": "response.completed",
+            "response": {"id": "resp_stream", "object": "response", "model": model, "status": "completed",
+                "output": [{"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": text}]}],
+                "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}}}),
+    ));
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -653,5 +705,27 @@ mod tests {
         frame.extend_from_slice(&u32::try_from(gz.len()).unwrap().to_be_bytes());
         frame.extend_from_slice(&gz);
         assert_eq!(decode_cursor_response(&frame).text, "zipped");
+    }
+
+    #[test]
+    fn synthesizes_responses_json_with_output_text() {
+        let decoded = CursorDecoded {
+            text: "hi there".into(),
+            reasoning: String::new(),
+            error: None,
+        };
+        let payload = synth_responses_json(&decoded, "composer-2.5");
+        assert_eq!(payload["object"], "response");
+        let text = payload["output"][0]["content"][0]["text"].as_str().unwrap();
+        assert_eq!(text, "hi there");
+    }
+
+    #[test]
+    fn streaming_sse_emits_output_text_delta_and_completed() {
+        let chunks = responses_sse_from_decoded("hello", "", "composer-2.5");
+        let joined = chunks.join("");
+        assert!(joined.contains("response.output_text.delta"), "{joined}");
+        assert!(joined.contains("\"delta\":\"hello\""), "{joined}");
+        assert!(joined.contains("response.completed"), "{joined}");
     }
 }
