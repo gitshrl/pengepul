@@ -9,6 +9,7 @@ pub enum ProviderId {
     Anthropic,
     Codex,
     OpenCodeGo,
+    Cursor,
 }
 
 impl ProviderId {
@@ -18,6 +19,7 @@ impl ProviderId {
             Self::Anthropic => "claude",
             Self::Codex => "codex",
             Self::OpenCodeGo => "opencodego",
+            Self::Cursor => "cursor",
         }
     }
 }
@@ -28,6 +30,7 @@ impl fmt::Display for ProviderId {
             Self::Anthropic => formatter.write_str("anthropic"),
             Self::Codex => formatter.write_str("codex"),
             Self::OpenCodeGo => formatter.write_str("opencode-go"),
+            Self::Cursor => formatter.write_str("cursor"),
         }
     }
 }
@@ -40,6 +43,7 @@ impl FromStr for ProviderId {
             "anthropic" | "claude" => Ok(Self::Anthropic),
             "codex" => Ok(Self::Codex),
             "opencode-go" | "opencodego" => Ok(Self::OpenCodeGo),
+            "cursor" => Ok(Self::Cursor),
             other => Err(format!("unknown provider: {other}")),
         }
     }
@@ -125,5 +129,12 @@ mod tests {
         assert_eq!(ProviderId::OpenCodeGo.to_string(), "opencode-go");
         assert_eq!(ProviderId::OpenCodeGo.storage_prefix(), "opencodego");
         assert!("nope".parse::<ProviderId>().is_err());
+    }
+
+    #[test]
+    fn cursor_provider_id_parses_and_displays() {
+        assert_eq!("cursor".parse::<ProviderId>(), Ok(ProviderId::Cursor));
+        assert_eq!(ProviderId::Cursor.to_string(), "cursor");
+        assert_eq!(ProviderId::Cursor.storage_prefix(), "cursor");
     }
 }
