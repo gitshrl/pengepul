@@ -10,6 +10,8 @@ use crate::providers::strip_cursor_prefix;
 use crate::types::AvailableAccount;
 
 pub(crate) const CURSOR_DEFAULT_MODEL: &str = "composer-2.5";
+pub(crate) const CURSOR_API_BASE_URL: &str = "https://api2.cursor.sh";
+pub(crate) const CURSOR_CHAT_PATH: &str = "/aiserver.v1.ChatService/StreamUnifiedChatWithTools";
 
 pub(crate) fn encode_varint(mut value: u32, out: &mut Vec<u8>) {
     while value >= 0x80 {
@@ -43,7 +45,6 @@ pub(crate) struct RawField {
     pub field: u32,
     pub wire: u8,
     pub bytes: Option<Vec<u8>>,
-    pub varint: Option<u64>,
 }
 
 fn decode_varint(data: &[u8], pos: usize) -> (u64, usize) {
@@ -73,12 +74,11 @@ pub(crate) fn parse_fields(data: &[u8]) -> Vec<RawField> {
         let wire = (tag & 7) as u8;
         match wire {
             0 => {
-                let (v, p) = decode_varint(data, pos);
+                let (_v, p) = decode_varint(data, pos);
                 out.push(RawField {
                     field,
                     wire,
                     bytes: None,
-                    varint: Some(v),
                 });
                 pos = p;
             }
@@ -93,7 +93,6 @@ pub(crate) fn parse_fields(data: &[u8]) -> Vec<RawField> {
                     field,
                     wire,
                     bytes: Some(data[pos..pos + len].to_vec()),
-                    varint: None,
                 });
                 pos += len;
             }
@@ -625,7 +624,9 @@ mod tests {
         encode_varint_field(2, 7, &mut buf);
         let fields = parse_fields(&buf);
         assert_eq!(field_bytes(&fields, 1).unwrap(), b"hello");
-        assert_eq!(fields.iter().find(|f| f.field == 2).unwrap().varint, Some(7));
+        // the trailing varint field is parsed (wire type 0) without corrupting the byte field
+        // that precedes it.
+        assert_eq!(fields.iter().find(|f| f.field == 2).unwrap().wire, 0);
     }
 
     #[test]

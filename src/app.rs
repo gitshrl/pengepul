@@ -344,12 +344,98 @@ impl UpstreamClient for HttpUpstreamClient {
         })
     }
 
-    fn cursor_responses(&self, _request: UpstreamRequest) -> UpstreamFuture {
-        Box::pin(async { anyhow::bail!("cursor provider not yet implemented") })
+    fn cursor_responses(&self, request: UpstreamRequest) -> UpstreamFuture {
+        let client = self.client.clone();
+        Box::pin(async move {
+            let model = crate::cursor::normalize_model(
+                request.body.get("model").and_then(Value::as_str).unwrap_or("cursor/"),
+            );
+            let frame = crate::cursor::encode_cursor_chat_request(&request.body);
+            let headers = crate::cursor::cursor_headers(&request.account, &request.config);
+            let timeout_ms = request.config.timeouts.stream_messages_ms;
+            let response = send_bytes_stream(
+                client,
+                format!(
+                    "{}{}",
+                    crate::cursor::CURSOR_API_BASE_URL,
+                    crate::cursor::CURSOR_CHAT_PATH
+                ),
+                headers,
+                frame,
+                "application/connect+proto",
+                timeout_ms,
+            )
+            .await?;
+            let status = response.status;
+            let mut body = response.body;
+            let mut buf = Vec::new();
+            while let Some(chunk) = body.next().await {
+                buf.extend_from_slice(&chunk?);
+            }
+            if !status.is_success() {
+                return Ok(UpstreamJsonResponse {
+                    status: StatusCode::BAD_GATEWAY,
+                    body: json!({"error": {"message": String::from_utf8_lossy(&buf)}}),
+                });
+            }
+            let decoded = crate::cursor::decode_cursor_response(&buf);
+            if let Some(error) = decoded.error {
+                return Ok(UpstreamJsonResponse {
+                    status: StatusCode::BAD_GATEWAY,
+                    body: json!({"error": {"message": error}}),
+                });
+            }
+            Ok(UpstreamJsonResponse {
+                status,
+                body: crate::cursor::synth_responses_json(&decoded, &model),
+            })
+        })
     }
 
-    fn cursor_responses_stream(&self, _request: UpstreamRequest) -> UpstreamSseFuture {
-        Box::pin(async { anyhow::bail!("cursor provider not yet implemented") })
+    fn cursor_responses_stream(&self, request: UpstreamRequest) -> UpstreamSseFuture {
+        let client = self.client.clone();
+        Box::pin(async move {
+            let model = crate::cursor::normalize_model(
+                request.body.get("model").and_then(Value::as_str).unwrap_or("cursor/"),
+            );
+            let frame = crate::cursor::encode_cursor_chat_request(&request.body);
+            let headers = crate::cursor::cursor_headers(&request.account, &request.config);
+            let timeout_ms = request.config.timeouts.stream_messages_ms;
+            let upstream = send_bytes_stream(
+                client,
+                format!(
+                    "{}{}",
+                    crate::cursor::CURSOR_API_BASE_URL,
+                    crate::cursor::CURSOR_CHAT_PATH
+                ),
+                headers,
+                frame,
+                "application/connect+proto",
+                timeout_ms,
+            )
+            .await?;
+            let status = upstream.status;
+            if !status.is_success() {
+                return Ok(upstream);
+            }
+            let model_for_stream = model.clone();
+            let sse = Box::pin(try_stream! {
+                let mut raw = upstream.body;
+                let mut buf = Vec::new();
+                while let Some(chunk) = raw.next().await {
+                    buf.extend_from_slice(&chunk?);
+                }
+                let decoded = crate::cursor::decode_cursor_response(&buf);
+                for event in crate::cursor::responses_sse_from_decoded(
+                    &decoded.text,
+                    &decoded.reasoning,
+                    &model_for_stream,
+                ) {
+                    yield Bytes::from(event);
+                }
+            });
+            Ok(UpstreamSseResponse { status, body: sse })
+        })
     }
 }
 
@@ -1820,6 +1906,38 @@ async fn send_stream(
         tracing::debug!(%url, status = status.as_u16(), "upstream stream opened");
     } else {
         tracing::warn!(%url, status = status.as_u16(), "upstream stream error");
+    }
+    Ok(UpstreamSseResponse {
+        status,
+        body: Box::pin(response.bytes_stream().map_err(anyhow::Error::from)),
+    })
+}
+
+async fn send_bytes_stream(
+    client: reqwest::Client,
+    url: String,
+    headers: BTreeMap<String, String>,
+    body: Vec<u8>,
+    content_type: &str,
+    timeout_ms: u64,
+) -> anyhow::Result<UpstreamSseResponse> {
+    let mut request = client
+        .post(&url)
+        .timeout(Duration::from_millis(timeout_ms))
+        .header(CONTENT_TYPE, content_type)
+        .body(body);
+    for (key, value) in headers {
+        if key.eq_ignore_ascii_case("content-type") {
+            continue;
+        }
+        request = request.header(key, value);
+    }
+    let response = request.send().await?;
+    let status = StatusCode::from_u16(response.status().as_u16())?;
+    if status.is_success() {
+        tracing::debug!(%url, status = status.as_u16(), "upstream byte stream opened");
+    } else {
+        tracing::warn!(%url, status = status.as_u16(), "upstream byte stream error");
     }
     Ok(UpstreamSseResponse {
         status,

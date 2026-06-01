@@ -470,6 +470,122 @@ fn cursor_token() -> TokenData {
     }
 }
 
+/// Fake cursor upstream: emits a Responses-shaped JSON object (and SSE stream), mirroring what the
+/// real `src/cursor.rs` decoder synthesizes. Proves the `(Cursor, Chat)` arm reshapes Responses
+/// JSON into `chat.completion` via the shared Codex path.
+#[derive(Default)]
+struct CursorUpstream {
+    calls: Mutex<Vec<UpstreamRequest>>,
+}
+
+impl CursorUpstream {
+    fn calls(&self) -> Vec<UpstreamRequest> {
+        self.calls.lock().expect("calls lock").clone()
+    }
+}
+
+impl UpstreamClient for CursorUpstream {
+    fn anthropic_messages(
+        &self,
+        _request: UpstreamRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<UpstreamJsonResponse>> + Send>> {
+        unreachable!("anthropic not used in cursor test")
+    }
+
+    fn anthropic_messages_stream(
+        &self,
+        _request: UpstreamRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<UpstreamSseResponse>> + Send>> {
+        unreachable!("anthropic stream not used in cursor test")
+    }
+
+    fn anthropic_count_tokens(
+        &self,
+        _request: UpstreamRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<UpstreamJsonResponse>> + Send>> {
+        unreachable!("count_tokens not used in cursor test")
+    }
+
+    fn codex_responses(
+        &self,
+        _request: UpstreamRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<UpstreamJsonResponse>> + Send>> {
+        unreachable!("codex not used in cursor test")
+    }
+
+    fn codex_responses_stream(
+        &self,
+        _request: UpstreamRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<UpstreamSseResponse>> + Send>> {
+        unreachable!("codex stream not used in cursor test")
+    }
+
+    fn opencode_go_chat(
+        &self,
+        _request: UpstreamRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<UpstreamJsonResponse>> + Send>> {
+        unreachable!("opencode-go not used in cursor test")
+    }
+
+    fn opencode_go_chat_stream(
+        &self,
+        _request: UpstreamRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<UpstreamSseResponse>> + Send>> {
+        unreachable!("opencode-go stream not used in cursor test")
+    }
+
+    fn cursor_responses(
+        &self,
+        request: UpstreamRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<UpstreamJsonResponse>> + Send>> {
+        let model = request
+            .body
+            .get("model")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        self.calls.lock().expect("calls lock").push(request);
+        Box::pin(async move {
+            Ok(UpstreamJsonResponse {
+                status: axum::http::StatusCode::OK,
+                body: json!({
+                    "id": "resp_cursor_1",
+                    "object": "response",
+                    "status": "completed",
+                    "model": model,
+                    "output": [{
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "hi from cursor"}]
+                    }],
+                    "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+                }),
+            })
+        })
+    }
+
+    fn cursor_responses_stream(
+        &self,
+        request: UpstreamRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<UpstreamSseResponse>> + Send>> {
+        self.calls.lock().expect("calls lock").push(request);
+        Box::pin(async {
+            Ok(UpstreamSseResponse {
+                status: axum::http::StatusCode::OK,
+                body: Box::pin(futures_util::stream::iter([
+                    Ok(Bytes::from_static(
+                        b"event: response.output_text.delta\ndata: {\"delta\":\"hi from cursor\"}\n\n",
+                    )),
+                    Ok(Bytes::from_static(
+                        b"event: response.completed\ndata: {\"response\":{\"id\":\"resp_cursor_1\",\"object\":\"response\",\"status\":\"completed\",\"model\":\"composer-2.5\",\"usage\":{\"input_tokens\":0,\"output_tokens\":0}}}\n\n",
+                    )),
+                    Ok(Bytes::from_static(b"data: [DONE]\n\n")),
+                ])),
+            })
+        })
+    }
+}
+
 #[tokio::test]
 async fn app_opencode_go_chat_passes_through_with_stripped_model() {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -662,6 +778,44 @@ async fn cursor_models_listed_when_account_present() {
         .filter_map(|model| model["id"].as_str())
         .collect::<Vec<_>>();
     assert!(ids.contains(&"cursor/composer-2.5"), "{ids:?}");
+}
+
+#[tokio::test]
+async fn cursor_chat_returns_chat_completion_shape() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    save_token(tmp.path(), &cursor_token()).expect("save");
+    let upstream = Arc::new(CursorUpstream::default());
+    let app = create_app_with_upstream(config(tmp.path().to_path_buf()), upstream.clone());
+
+    let (status, body) = json_response(
+        app,
+        axum::http::Request::builder()
+            .method("POST")
+            .uri("/v1/chat/completions")
+            .header("authorization", "Bearer sk-test")
+            .header("content-type", "application/json")
+            .header("content-length", "1")
+            .body(Body::from(
+                json!({
+                    "model": "cursor/composer-2.5",
+                    "messages": [{"role": "user", "content": "say hi"}]
+                })
+                .to_string(),
+            ))
+            .unwrap(),
+    )
+    .await;
+
+    assert_eq!(status, 200);
+    // (Cursor, Chat) reshapes the upstream Responses JSON into chat.completion via the Codex path.
+    assert_eq!(body["object"], "chat.completion");
+    assert_eq!(body["choices"][0]["message"]["content"], "hi from cursor");
+    let calls = upstream.calls();
+    assert_eq!(calls.len(), 1);
+    // the chat request is reshaped into a Responses-shaped body before the upstream call; the
+    // cursor upstream normalizes the model (strips cursor/) internally when encoding the frame.
+    assert_eq!(calls[0].body["model"], "cursor/composer-2.5");
+    assert!(calls[0].body.get("input").is_some());
 }
 
 #[tokio::test]
