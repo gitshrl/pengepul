@@ -817,6 +817,74 @@ mod tests {
         let _ = decode_cursor_response(&frame); // must not panic
     }
 
+    fn json_error_frame(json: &str) -> Vec<u8> {
+        // kind=2 connect frame: first byte is the kind, then a big-endian u32 length, then the
+        // payload. JSON error frames are uncompressed (gzip is only used for kind 1/3), so the
+        // body is written verbatim.
+        let payload = json.as_bytes();
+        let mut frame = vec![2u8];
+        frame.extend_from_slice(&u32::try_from(payload.len()).unwrap().to_be_bytes());
+        frame.extend_from_slice(payload);
+        frame
+    }
+
+    #[test]
+    fn decodes_error_from_kind2_json_frame() {
+        let frame = json_error_frame(r#"{"error":{"code":"ERR","message":"boom"}}"#);
+        let decoded = decode_cursor_response(&frame);
+        // extract_json_error joins code and message with " — ".
+        assert_eq!(decoded.error.as_deref(), Some("ERR — boom"));
+    }
+
+    #[test]
+    fn kind2_frame_without_code_or_message_yields_no_error() {
+        let frame = json_error_frame(r#"{"error":{"detail":"nope"}}"#);
+        let decoded = decode_cursor_response(&frame);
+        assert_eq!(decoded.error, None);
+    }
+
+    #[test]
+    fn messages_from_body_messages_only_yields_single_user_turn() {
+        let body = serde_json::json!({"messages": [{"role": "user", "content": "hi"}]});
+        let msgs = messages_from_body(&body);
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].role, Role::User);
+        assert_eq!(msgs[0].content, "hi");
+    }
+
+    #[test]
+    fn messages_from_body_system_only_becomes_user_turn() {
+        // no user/input turn exists, so the folded system text seeds a synthetic user turn.
+        let body = serde_json::json!({"system": "S"});
+        let msgs = messages_from_body(&body);
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].role, Role::User);
+        assert_eq!(msgs[0].content, "S");
+    }
+
+    #[test]
+    fn messages_from_body_whitespace_only_falls_back_to_empty_user() {
+        let body = serde_json::json!({"input": "   "});
+        let msgs = messages_from_body(&body);
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].role, Role::User);
+        assert_eq!(msgs[0].content, "");
+    }
+
+    #[test]
+    fn messages_from_body_drops_blank_assistant_turn() {
+        let body = serde_json::json!({
+            "messages": [
+                {"role": "assistant", "content": "   "},
+                {"role": "user", "content": "hi"}
+            ]
+        });
+        let msgs = messages_from_body(&body);
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].role, Role::User);
+        assert_eq!(msgs[0].content, "hi");
+    }
+
     #[test]
     fn error_sse_emits_failed_without_completed() {
         let joined = responses_sse_error("composer-2.5", "boom").join("");

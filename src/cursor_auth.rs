@@ -366,6 +366,18 @@ mod tests {
         assert!(body.contains("\"refresh_token\":\"rt-123\""), "{body}");
     }
 
+    #[tokio::test]
+    async fn refresh_with_empty_token_is_exhausted_without_network() {
+        // The empty-token guard short-circuits before any request, so no network is touched.
+        let err = refresh_cursor_tokens(String::new())
+            .await
+            .expect_err("empty refresh token must be refused");
+        let exhausted = err
+            .downcast_ref::<RefreshTokenExhaustedError>()
+            .expect("downcasts to RefreshTokenExhaustedError");
+        assert_eq!(exhausted.reason, "invalidated");
+    }
+
     #[test]
     fn refresh_response_token_carries_no_cursor_meta() {
         // Regression: refresh must return cursor: None so AccountManager's
