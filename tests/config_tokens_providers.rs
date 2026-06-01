@@ -216,7 +216,8 @@ fn registry_routes_anthropic_codex_and_opencode_go() {
         [
             "anthropic".parse().unwrap(),
             "codex".parse().unwrap(),
-            "opencode-go".parse().unwrap()
+            "opencode-go".parse().unwrap(),
+            "cursor".parse().unwrap()
         ]
     );
     assert_eq!(

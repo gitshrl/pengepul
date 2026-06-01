@@ -136,7 +136,7 @@ fn default_command_starts_server() {
     assert_eq!(outcome.code, 0);
     assert_eq!(runtime.server_host.as_deref(), Some("0.0.0.0"));
     assert_eq!(runtime.server_port, Some(8318));
-    assert_eq!(runtime.server_provider_count, 3);
+    assert_eq!(runtime.server_provider_count, 4);
     assert!(outcome.stderr.is_empty());
 }
 

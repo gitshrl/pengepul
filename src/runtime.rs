@@ -158,6 +158,9 @@ impl CliRuntime for RealRuntime {
                 ProviderId::OpenCodeGo => {
                     unreachable!("opencode-go login is handled before the OAuth flow")
                 }
+                ProviderId::Cursor => {
+                    unreachable!("cursor login handled before the OAuth flow")
+                }
             }
         })?;
         let email = token.email.clone();
@@ -239,6 +242,7 @@ fn auth_url(provider: ProviderId, state: &str, pkce: &PkceCodes) -> String {
         ProviderId::Anthropic => generate_anthropic_auth_url(state, pkce),
         ProviderId::Codex => generate_codex_auth_url(state, pkce),
         ProviderId::OpenCodeGo => unreachable!("opencode-go has no OAuth authorize URL"),
+        ProviderId::Cursor => unreachable!("cursor login handled before the OAuth flow"),
     }
 }
 
@@ -251,6 +255,7 @@ fn callback_endpoint(provider: ProviderId) -> Result<(u16, &'static str)> {
         }
         ProviderId::Codex => Ok((CODEX_CALLBACK_PORT, CODEX_CALLBACK_PATH)),
         ProviderId::OpenCodeGo => bail!("opencode-go has no OAuth callback"),
+        ProviderId::Cursor => unreachable!("cursor login handled before the OAuth flow"),
     }
 }
 

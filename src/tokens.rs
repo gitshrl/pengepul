@@ -208,7 +208,7 @@ mod cursor_tests {
             account_uuid: "uuid-1".into(),
             provider: ProviderId::Cursor,
             id_token: None,
-            last_refresh_at: None,
+            last_refresh_at: Some("2026-01-01T00:00:00Z".into()),
             plan_type: Some("pro".into()),
             cursor: Some(CursorMeta {
                 service_machine_id: Some("machine-1".into()),

@@ -110,6 +110,20 @@ impl UpstreamClient for RetryUpstream {
     ) -> Pin<Box<dyn Future<Output = Result<UpstreamSseResponse>> + Send>> {
         unreachable!("opencode-go stream not used in retry test")
     }
+
+    fn cursor_responses(
+        &self,
+        _request: UpstreamRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<UpstreamJsonResponse>> + Send>> {
+        unreachable!("cursor not used in retry test")
+    }
+
+    fn cursor_responses_stream(
+        &self,
+        _request: UpstreamRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<UpstreamSseResponse>> + Send>> {
+        unreachable!("cursor stream not used in retry test")
+    }
 }
 
 impl UpstreamClient for FakeUpstream {
@@ -268,6 +282,20 @@ impl UpstreamClient for FakeUpstream {
             })
         })
     }
+
+    fn cursor_responses(
+        &self,
+        _request: UpstreamRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<UpstreamJsonResponse>> + Send>> {
+        unreachable!("cursor not used in fake upstream test")
+    }
+
+    fn cursor_responses_stream(
+        &self,
+        _request: UpstreamRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<UpstreamSseResponse>> + Send>> {
+        unreachable!("cursor stream not used in fake upstream test")
+    }
 }
 
 fn config(auth_dir: PathBuf) -> Config {
@@ -419,6 +447,26 @@ fn opencode_go_token() -> TokenData {
         last_refresh_at: None,
         plan_type: None,
         cursor: None,
+    }
+}
+
+fn cursor_token() -> TokenData {
+    TokenData {
+        access_token: "cursor-jwt".to_string(),
+        refresh_token: "cursor-refresh".to_string(),
+        email: "cursor-acct".to_string(),
+        expires_at: "2030-01-01T00:00:00Z".to_string(),
+        account_uuid: "cursor-uuid".to_string(),
+        provider: ProviderId::Cursor,
+        id_token: None,
+        last_refresh_at: None,
+        plan_type: None,
+        cursor: Some(pengepul::types::CursorMeta {
+            service_machine_id: Some("m".into()),
+            client_version: "cli-x".into(),
+            config_version: "cfg".into(),
+            client_id: "cid".into(),
+        }),
     }
 }
 
@@ -588,6 +636,32 @@ async fn app_models_lists_opencode_go_when_key_present() {
         .filter_map(|model| model["id"].as_str())
         .collect::<Vec<_>>();
     assert!(ids.contains(&"opencode-go/glm-5.1"));
+}
+
+#[tokio::test]
+async fn cursor_models_listed_when_account_present() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    save_token(tmp.path(), &cursor_token()).expect("save cursor token");
+    let app = create_app(config(tmp.path().to_path_buf()));
+
+    let (status, body) = json_response(
+        app,
+        axum::http::Request::builder()
+            .uri("/v1/models")
+            .header("authorization", "Bearer sk-test")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+
+    assert_eq!(status, 200);
+    let ids = body["data"]
+        .as_array()
+        .expect("data array")
+        .iter()
+        .filter_map(|model| model["id"].as_str())
+        .collect::<Vec<_>>();
+    assert!(ids.contains(&"cursor/composer-2.5"), "{ids:?}");
 }
 
 #[tokio::test]

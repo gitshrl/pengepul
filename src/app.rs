@@ -77,6 +77,8 @@ pub trait UpstreamClient: Send + Sync {
     fn codex_responses_stream(&self, request: UpstreamRequest) -> UpstreamSseFuture;
     fn opencode_go_chat(&self, request: UpstreamRequest) -> UpstreamFuture;
     fn opencode_go_chat_stream(&self, request: UpstreamRequest) -> UpstreamSseFuture;
+    fn cursor_responses(&self, request: UpstreamRequest) -> UpstreamFuture;
+    fn cursor_responses_stream(&self, request: UpstreamRequest) -> UpstreamSseFuture;
 }
 
 #[derive(Clone)]
@@ -93,6 +95,7 @@ struct AccountManagers {
     anthropic: tokio::sync::Mutex<AccountManager>,
     codex: tokio::sync::Mutex<AccountManager>,
     opencode_go: tokio::sync::Mutex<AccountManager>,
+    cursor: tokio::sync::Mutex<AccountManager>,
 }
 
 #[derive(Clone)]
@@ -340,6 +343,14 @@ impl UpstreamClient for HttpUpstreamClient {
             .await
         })
     }
+
+    fn cursor_responses(&self, _request: UpstreamRequest) -> UpstreamFuture {
+        Box::pin(async { anyhow::bail!("cursor provider not yet implemented") })
+    }
+
+    fn cursor_responses_stream(&self, _request: UpstreamRequest) -> UpstreamSseFuture {
+        Box::pin(async { anyhow::bail!("cursor provider not yet implemented") })
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -412,19 +423,33 @@ fn build_account_managers(config: &Config) -> AccountManagers {
             seconds: 0,
         },
     );
+    let mut cursor = AccountManager::new(
+        config.auth_dir.clone(),
+        ProviderId::Cursor,
+        |_refresh_token| {
+            Box::pin(async { anyhow::bail!("cursor refresh not yet implemented") }) as RefreshFuture
+        },
+        RefreshPolicy {
+            kind: RefreshPolicyKind::ExpiresLead,
+            seconds: 600,
+        },
+    );
     let _ = anthropic.load();
     let _ = codex.load();
     let _ = opencode_go.load();
+    let _ = cursor.load();
     tracing::info!(
         anthropic = anthropic.account_count(),
         codex = codex.account_count(),
         opencode_go = opencode_go.account_count(),
+        cursor = cursor.account_count(),
         "loaded provider accounts"
     );
     AccountManagers {
         anthropic: tokio::sync::Mutex::new(anthropic),
         codex: tokio::sync::Mutex::new(codex),
         opencode_go: tokio::sync::Mutex::new(opencode_go),
+        cursor: tokio::sync::Mutex::new(cursor),
     }
 }
 
@@ -440,6 +465,7 @@ async fn admin_accounts(State(state): State<AppState>, headers: HeaderMap) -> Re
     let anthropic = state.account_managers.anthropic.lock().await;
     let codex = state.account_managers.codex.lock().await;
     let opencode_go = state.account_managers.opencode_go.lock().await;
+    let cursor = state.account_managers.cursor.lock().await;
     let providers = serde_json::Map::from_iter([
         (
             ProviderId::Anthropic.to_string(),
@@ -462,6 +488,13 @@ async fn admin_accounts(State(state): State<AppState>, headers: HeaderMap) -> Re
                 "account_count": opencode_go.account_count()
             }),
         ),
+        (
+            ProviderId::Cursor.to_string(),
+            json!({
+                "accounts": cursor.snapshots(),
+                "account_count": cursor.account_count()
+            }),
+        ),
     ]);
 
     Json(json!({"providers": providers, "generated_at": now_iso()})).into_response()
@@ -475,13 +508,18 @@ async fn admin_reload(State(state): State<AppState>, headers: HeaderMap) -> Resp
     let anthropic = state.account_managers.anthropic.lock().await.reload();
     let codex = state.account_managers.codex.lock().await.reload();
     let opencode_go = state.account_managers.opencode_go.lock().await.reload();
-    let reloaded = match (anthropic, codex, opencode_go) {
-        (Ok(anthropic), Ok(codex), Ok(opencode_go)) => serde_json::Map::from_iter([
+    let cursor = state.account_managers.cursor.lock().await.reload();
+    let reloaded = match (anthropic, codex, opencode_go, cursor) {
+        (Ok(anthropic), Ok(codex), Ok(opencode_go), Ok(cursor)) => serde_json::Map::from_iter([
             (ProviderId::Anthropic.to_string(), anthropic),
             (ProviderId::Codex.to_string(), codex),
             (ProviderId::OpenCodeGo.to_string(), opencode_go),
+            (ProviderId::Cursor.to_string(), cursor),
         ]),
-        (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => {
+        (Err(error), _, _, _)
+        | (_, Err(error), _, _)
+        | (_, _, Err(error), _)
+        | (_, _, _, Err(error)) => {
             return AppError::simple(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("failed to reload accounts: {error}"),
@@ -514,6 +552,7 @@ async fn models(State(state): State<AppState>, headers: HeaderMap) -> Response {
         .await
         .account_count()
         > 0;
+    let has_cursor = state.account_managers.cursor.lock().await.account_count() > 0;
     let mut models = [
         (ProviderId::Anthropic, "claude-sonnet-4-6"),
         (ProviderId::Anthropic, "claude-opus-4-8"),
@@ -525,6 +564,8 @@ async fn models(State(state): State<AppState>, headers: HeaderMap) -> Response {
         ProviderId::Codex => has_codex,
         // opencode-go has no entry in this seed list; its models are appended below.
         ProviderId::OpenCodeGo => false,
+        // cursor has no entry in this seed list; its models are appended below.
+        ProviderId::Cursor => false,
     })
     .map(|(provider, id)| {
         json!({
@@ -542,6 +583,16 @@ async fn models(State(state): State<AppState>, headers: HeaderMap) -> Response {
                 "object": "model",
                 "created": created,
                 "owned_by": ProviderId::OpenCodeGo.to_string()
+            })
+        }));
+    }
+    if has_cursor {
+        models.extend(crate::providers::CURSOR_MODELS.iter().map(|id| {
+            json!({
+                "id": format!("cursor/{id}"),
+                "object": "model",
+                "created": created,
+                "owned_by": ProviderId::Cursor.to_string()
             })
         }));
     }
@@ -601,7 +652,10 @@ async fn count_tokens(State(state): State<AppState>, headers: HeaderMap, body: B
     };
     let model = resolve_model(body.get("model").and_then(Value::as_str));
     let provider = state.registry.for_model(&model);
-    if matches!(provider.id, ProviderId::Codex | ProviderId::OpenCodeGo) {
+    if matches!(
+        provider.id,
+        ProviderId::Codex | ProviderId::OpenCodeGo | ProviderId::Cursor
+    ) {
         return AppError::provider(
             StatusCode::NOT_IMPLEMENTED,
             format!(
@@ -703,6 +757,18 @@ async fn route_provider_request(
                 )
                 .await
             }
+            ProviderId::Cursor => {
+                route_cursor_request(
+                    state,
+                    headers,
+                    body,
+                    route,
+                    &model,
+                    &account,
+                    client_wants_stream,
+                )
+                .await
+            }
             ProviderId::Anthropic => {
                 route_anthropic_request(
                     state,
@@ -748,6 +814,7 @@ async fn provider_account_count(state: &AppState, provider: ProviderId) -> usize
             .lock()
             .await
             .account_count(),
+        ProviderId::Cursor => state.account_managers.cursor.lock().await.account_count(),
     }
 }
 
@@ -803,6 +870,55 @@ async fn route_codex_request(
             json_upstream_response(response, ProviderId::Codex, route, model)
         }
         Err(error) => upstream_failure_response(state, ProviderId::Codex, account, &error).await,
+    }
+}
+
+async fn route_cursor_request(
+    state: &AppState,
+    headers: &HeaderMap,
+    body: &Value,
+    route: RequestRoute,
+    model: &str,
+    account: &AvailableAccount,
+    client_wants_stream: bool,
+) -> Response {
+    let body = codex_request_body(body, model, route);
+    if client_wants_stream {
+        return match state
+            .upstream
+            .cursor_responses_stream(UpstreamRequest {
+                body,
+                request_headers: headers_to_map(headers),
+                account: account.clone(),
+                config: (*state.config).clone(),
+            })
+            .await
+        {
+            Ok(response) => {
+                let accounting =
+                    stream_accounting(state, ProviderId::Cursor, account, response.status).await;
+                sse_upstream_response(response, ProviderId::Cursor, route, model, accounting)
+            }
+            Err(error) => {
+                upstream_failure_response(state, ProviderId::Cursor, account, &error).await
+            }
+        };
+    }
+    match state
+        .upstream
+        .cursor_responses(UpstreamRequest {
+            body,
+            request_headers: headers_to_map(headers),
+            account: account.clone(),
+            config: (*state.config).clone(),
+        })
+        .await
+    {
+        Ok(response) => {
+            record_json_result(state, ProviderId::Cursor, account, &response).await;
+            json_upstream_response(response, ProviderId::Cursor, route, model)
+        }
+        Err(error) => upstream_failure_response(state, ProviderId::Cursor, account, &error).await,
     }
 }
 
@@ -1096,6 +1212,7 @@ async fn next_provider_account(
         ProviderId::Anthropic => state.account_managers.anthropic.lock().await,
         ProviderId::Codex => state.account_managers.codex.lock().await,
         ProviderId::OpenCodeGo => state.account_managers.opencode_go.lock().await,
+        ProviderId::Cursor => state.account_managers.cursor.lock().await,
     };
     let result = manager.next_account_result();
     let Some(account) = result.account else {
@@ -1145,6 +1262,7 @@ async fn record_provider_success(
         ProviderId::Anthropic => state.account_managers.anthropic.lock().await,
         ProviderId::Codex => state.account_managers.codex.lock().await,
         ProviderId::OpenCodeGo => state.account_managers.opencode_go.lock().await,
+        ProviderId::Cursor => state.account_managers.cursor.lock().await,
     };
     manager.record_success(account.token.email.as_str(), usage.as_ref());
 }
@@ -1160,6 +1278,7 @@ async fn record_provider_failure(
         ProviderId::Anthropic => state.account_managers.anthropic.lock().await,
         ProviderId::Codex => state.account_managers.codex.lock().await,
         ProviderId::OpenCodeGo => state.account_managers.opencode_go.lock().await,
+        ProviderId::Cursor => state.account_managers.cursor.lock().await,
     };
     manager.record_failure(
         account.token.email.as_str(),
@@ -1272,12 +1391,12 @@ fn json_upstream_response(
             anthropic_to_responses(&response.body, model)
         }
         (ProviderId::Anthropic, RequestRoute::Messages)
-        | (ProviderId::Codex, RequestRoute::Responses)
+        | (ProviderId::Codex | ProviderId::Cursor, RequestRoute::Responses)
         | (ProviderId::OpenCodeGo, _) => response.body,
-        (ProviderId::Codex, RequestRoute::Chat) => {
+        (ProviderId::Codex | ProviderId::Cursor, RequestRoute::Chat) => {
             responses_to_chat_completion(&response.body, model)
         }
-        (ProviderId::Codex, RequestRoute::Messages) => {
+        (ProviderId::Codex | ProviderId::Cursor, RequestRoute::Messages) => {
             responses_to_anthropic_message(&response.body, model)
         }
     };
@@ -1438,7 +1557,9 @@ fn update_stream_usage(
     };
     match provider {
         ProviderId::Anthropic => update_anthropic_stream_usage(event, &data, usage, completed),
-        ProviderId::Codex => update_codex_stream_usage(event, &data, usage, completed),
+        ProviderId::Codex | ProviderId::Cursor => {
+            update_codex_stream_usage(event, &data, usage, completed);
+        }
         ProviderId::OpenCodeGo => update_chat_stream_usage(&data, usage),
     }
 }
@@ -1518,7 +1639,7 @@ fn transform_sse_event(
     if raw == "[DONE]" {
         return match (provider, route) {
             (ProviderId::Anthropic, RequestRoute::Messages)
-            | (ProviderId::Codex, RequestRoute::Responses)
+            | (ProviderId::Codex | ProviderId::Cursor, RequestRoute::Responses)
             | (ProviderId::OpenCodeGo, _) => vec!["data: [DONE]\n\n".to_string()],
             _ => Vec::new(),
         };
@@ -1527,7 +1648,7 @@ fn transform_sse_event(
     let parsed = serde_json::from_str::<Value>(raw);
     match (provider, route) {
         (ProviderId::Anthropic, RequestRoute::Messages)
-        | (ProviderId::Codex, RequestRoute::Responses) => parsed.map_or_else(
+        | (ProviderId::Codex | ProviderId::Cursor, RequestRoute::Responses) => parsed.map_or_else(
             |_| {
                 vec![sse(
                     &Value::String(raw.to_string()),
@@ -1544,11 +1665,11 @@ fn transform_sse_event(
             |_| Vec::new(),
             |data| anthropic_sse_to_responses(event, &data, responses_state, model),
         ),
-        (ProviderId::Codex, RequestRoute::Chat) => parsed.map_or_else(
+        (ProviderId::Codex | ProviderId::Cursor, RequestRoute::Chat) => parsed.map_or_else(
             |_| Vec::new(),
             |data| responses_sse_to_chat(event, &data, chat_state),
         ),
-        (ProviderId::Codex, RequestRoute::Messages) => parsed.map_or_else(
+        (ProviderId::Codex | ProviderId::Cursor, RequestRoute::Messages) => parsed.map_or_else(
             |_| Vec::new(),
             |data| responses_sse_to_anthropic(event, &data, anthropic_state),
         ),
@@ -1917,6 +2038,14 @@ mod tests {
         fn opencode_go_chat_stream(&self, _request: UpstreamRequest) -> UpstreamSseFuture {
             unreachable!("opencode-go stream not used in passthrough test")
         }
+
+        fn cursor_responses(&self, _request: UpstreamRequest) -> UpstreamFuture {
+            unreachable!("cursor not used in passthrough test")
+        }
+
+        fn cursor_responses_stream(&self, _request: UpstreamRequest) -> UpstreamSseFuture {
+            unreachable!("cursor stream not used in passthrough test")
+        }
     }
 
     fn token(email: &str, access_token: &str, expires_at: &str) -> TokenData {
@@ -2118,6 +2247,7 @@ mod tests {
                 anthropic: tokio::sync::Mutex::new(manager(tmp, ProviderId::Anthropic)),
                 codex: tokio::sync::Mutex::new(manager(tmp, ProviderId::Codex)),
                 opencode_go: tokio::sync::Mutex::new(manager(tmp, ProviderId::OpenCodeGo)),
+                cursor: tokio::sync::Mutex::new(manager(tmp, ProviderId::Cursor)),
             }),
             rate_limit_buckets: Arc::new(Mutex::new(std::collections::BTreeMap::<
                 String,
