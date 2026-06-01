@@ -19,6 +19,14 @@ struct StoredToken {
     id_token: Option<String>,
     last_refresh: Option<String>,
     plan_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cursor_service_machine_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cursor_client_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cursor_config_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cursor_client_id: Option<String>,
 }
 
 /// Save an OAuth token under the provider-specific auth directory filename.
@@ -82,7 +90,8 @@ pub fn load_all_tokens(auth_dir: &Path, provider: Option<ProviderId>) -> Result<
             }
         } else if !(filename.starts_with("claude-")
             || filename.starts_with("codex-")
-            || filename.starts_with("opencodego-"))
+            || filename.starts_with("opencodego-")
+            || filename.starts_with("cursor-"))
         {
             continue;
         }
@@ -110,12 +119,20 @@ fn token_to_storage(token: &TokenData) -> StoredToken {
             ProviderId::Anthropic => "claude".to_string(),
             ProviderId::Codex => "codex".to_string(),
             ProviderId::OpenCodeGo => "opencodego".to_string(),
+            ProviderId::Cursor => "cursor".to_string(),
         }),
         expired: token.expires_at.clone(),
         account_uuid: Some(token.account_uuid.clone()),
         id_token: token.id_token.clone(),
         last_refresh: Some(token.last_refresh_at.clone().unwrap_or_else(now_iso)),
         plan_type: token.plan_type.clone(),
+        cursor_service_machine_id: token
+            .cursor
+            .as_ref()
+            .and_then(|c| c.service_machine_id.clone()),
+        cursor_client_version: token.cursor.as_ref().map(|c| c.client_version.clone()),
+        cursor_config_version: token.cursor.as_ref().map(|c| c.config_version.clone()),
+        cursor_client_id: token.cursor.as_ref().map(|c| c.client_id.clone()),
     }
 }
 
@@ -123,6 +140,7 @@ fn storage_to_token(stored: StoredToken) -> TokenData {
     let provider = match stored.token_type.as_deref() {
         Some("codex") => ProviderId::Codex,
         Some("opencodego") => ProviderId::OpenCodeGo,
+        Some("cursor") => ProviderId::Cursor,
         _ => ProviderId::Anthropic,
     };
     let plan_type = stored
@@ -139,7 +157,12 @@ fn storage_to_token(stored: StoredToken) -> TokenData {
         id_token: stored.id_token,
         last_refresh_at: stored.last_refresh,
         plan_type,
-        cursor: None,
+        cursor: (provider == ProviderId::Cursor).then(|| crate::types::CursorMeta {
+            service_machine_id: stored.cursor_service_machine_id,
+            client_version: stored.cursor_client_version.unwrap_or_default(),
+            config_version: stored.cursor_config_version.unwrap_or_default(),
+            client_id: stored.cursor_client_id.unwrap_or_default(),
+        }),
     }
 }
 
@@ -167,4 +190,35 @@ fn set_mode(path: &Path, mode: u32) -> Result<()> {
 #[cfg(not(unix))]
 fn set_mode(_path: &Path, _mode: u32) -> Result<()> {
     Ok(())
+}
+
+#[cfg(test)]
+mod cursor_tests {
+    use super::*;
+    use crate::types::{CursorMeta, ProviderId, TokenData};
+
+    #[test]
+    fn cursor_token_round_trips_with_meta() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let token = TokenData {
+            access_token: "jwt".into(),
+            refresh_token: "rt".into(),
+            email: "u@cursor.local".into(),
+            expires_at: "2030-01-01T00:00:00Z".into(),
+            account_uuid: "uuid-1".into(),
+            provider: ProviderId::Cursor,
+            id_token: None,
+            last_refresh_at: None,
+            plan_type: Some("pro".into()),
+            cursor: Some(CursorMeta {
+                service_machine_id: Some("machine-1".into()),
+                client_version: "cli-x".into(),
+                config_version: "cfg-1".into(),
+                client_id: "cid-1".into(),
+            }),
+        };
+        save_token(dir.path(), &token).expect("save");
+        let loaded = load_all_tokens(dir.path(), Some(ProviderId::Cursor)).expect("load");
+        assert_eq!(loaded, vec![token]);
+    }
 }
