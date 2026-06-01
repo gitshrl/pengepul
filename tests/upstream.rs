@@ -48,6 +48,7 @@ fn account(provider: ProviderId) -> AvailableAccount {
             id_token: None,
             last_refresh_at: None,
             plan_type: None,
+            cursor: None,
         },
         device_id: "device-123".to_string(),
         account_uuid: format!("acct-{provider}"),

@@ -418,6 +418,7 @@ fn opencode_go_token() -> TokenData {
         id_token: None,
         last_refresh_at: None,
         plan_type: None,
+        cursor: None,
     }
 }
 
@@ -829,6 +830,7 @@ async fn messages_route_forwards_anthropic_account_with_resolved_model() {
             id_token: None,
             last_refresh_at: None,
             plan_type: None,
+            cursor: None,
         },
     )
     .expect("save token");
@@ -881,6 +883,7 @@ async fn messages_route_rotates_available_anthropic_accounts() {
                 id_token: None,
                 last_refresh_at: None,
                 plan_type: None,
+                cursor: None,
             },
         )
         .expect("save token");
@@ -937,6 +940,7 @@ async fn messages_route_retries_next_account_after_retryable_upstream_failure() 
                 id_token: None,
                 last_refresh_at: None,
                 plan_type: None,
+                cursor: None,
             },
         )
         .expect("save token");
@@ -991,6 +995,7 @@ async fn chat_completions_route_adapts_anthropic_response_to_openai() {
             id_token: None,
             last_refresh_at: None,
             plan_type: None,
+            cursor: None,
         },
     )
     .expect("save token");
@@ -1037,6 +1042,7 @@ async fn chat_completions_route_streams_anthropic_response_to_openai() {
             id_token: None,
             last_refresh_at: None,
             plan_type: None,
+            cursor: None,
         },
     )
     .expect("save token");
@@ -1107,6 +1113,7 @@ async fn responses_route_adapts_anthropic_response_to_responses() {
             id_token: None,
             last_refresh_at: None,
             plan_type: None,
+            cursor: None,
         },
     )
     .expect("save token");
@@ -1148,6 +1155,7 @@ async fn responses_route_sends_web_search_and_reasoning_to_anthropic() {
             id_token: None,
             last_refresh_at: None,
             plan_type: None,
+            cursor: None,
         },
     )
     .expect("save token");
@@ -1201,6 +1209,7 @@ async fn count_tokens_route_forwards_anthropic_account_with_resolved_model() {
             id_token: None,
             last_refresh_at: None,
             plan_type: None,
+            cursor: None,
         },
     )
     .expect("save token");
@@ -1248,6 +1257,7 @@ async fn messages_route_translates_anthropic_payload_for_codex() {
             id_token: None,
             last_refresh_at: None,
             plan_type: None,
+            cursor: None,
         },
     )
     .expect("save token");
@@ -1306,6 +1316,7 @@ async fn messages_route_forwards_anthropic_tool_choice_for_codex() {
             id_token: None,
             last_refresh_at: None,
             plan_type: None,
+            cursor: None,
         },
     )
     .expect("save token");
@@ -1365,6 +1376,7 @@ async fn chat_completions_route_adapts_codex_response_to_openai() {
             id_token: None,
             last_refresh_at: None,
             plan_type: None,
+            cursor: None,
         },
     )
     .expect("save token");
@@ -1411,6 +1423,7 @@ async fn chat_completions_route_streams_codex_usage_to_account_stats() {
             id_token: None,
             last_refresh_at: None,
             plan_type: None,
+            cursor: None,
         },
     )
     .expect("save token");
@@ -1480,6 +1493,7 @@ async fn chat_route_preserves_responses_web_search_for_codex() {
             id_token: None,
             last_refresh_at: None,
             plan_type: None,
+            cursor: None,
         },
     )
     .expect("save token");
@@ -1533,6 +1547,7 @@ async fn responses_route_normalizes_string_input_for_codex() {
             id_token: None,
             last_refresh_at: None,
             plan_type: None,
+            cursor: None,
         },
     )
     .expect("save token");

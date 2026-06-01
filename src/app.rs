@@ -1930,6 +1930,7 @@ mod tests {
             id_token: None,
             last_refresh_at: None,
             plan_type: None,
+            cursor: None,
         }
     }
 
@@ -2103,6 +2104,7 @@ mod tests {
             id_token: None,
             last_refresh_at: None,
             plan_type: None,
+            cursor: None,
         }
     }
 

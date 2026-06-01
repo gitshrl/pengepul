@@ -56,6 +56,14 @@ pub struct PkceCodes {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CursorMeta {
+    pub service_machine_id: Option<String>,
+    pub client_version: String,
+    pub config_version: String,
+    pub client_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TokenData {
     pub access_token: String,
     pub refresh_token: String,
@@ -66,6 +74,7 @@ pub struct TokenData {
     pub id_token: Option<String>,
     pub last_refresh_at: Option<String>,
     pub plan_type: Option<String>,
+    pub cursor: Option<CursorMeta>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -136,5 +145,17 @@ mod tests {
         assert_eq!("cursor".parse::<ProviderId>(), Ok(ProviderId::Cursor));
         assert_eq!(ProviderId::Cursor.to_string(), "cursor");
         assert_eq!(ProviderId::Cursor.storage_prefix(), "cursor");
+    }
+
+    #[test]
+    fn token_data_defaults_cursor_none() {
+        let meta = super::CursorMeta {
+            service_machine_id: Some("m".into()),
+            client_version: "cli-x".into(),
+            config_version: "cfg".into(),
+            client_id: "cid".into(),
+        };
+        assert_eq!(meta.client_id, "cid");
+        assert_eq!(meta.service_machine_id.as_deref(), Some("m"));
     }
 }

@@ -228,6 +228,7 @@ fn anthropic_token(data: &Value) -> Result<TokenData> {
         id_token: None,
         last_refresh_at: None,
         plan_type: None,
+        cursor: None,
     })
 }
 
@@ -263,6 +264,7 @@ fn codex_token(data: &Value) -> Result<TokenData> {
         id_token: Some(id_token),
         last_refresh_at: None,
         plan_type,
+        cursor: None,
     })
 }
 

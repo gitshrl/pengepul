@@ -276,6 +276,7 @@ fn save_opencode_go_login(config: &Config, key: Option<&str>) -> Result<String> 
         id_token: None,
         last_refresh_at: None,
         plan_type: None,
+        cursor: None,
     };
     save_token(&config.auth_dir, &token)?;
     Ok(email)

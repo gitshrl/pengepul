@@ -42,6 +42,7 @@ async fn since_last_refresh_refreshes_legacy_token_without_last_refresh() {
                     id_token: None,
                     last_refresh_at: None,
                     plan_type: None,
+                    cursor: None,
                 })
             })
         },

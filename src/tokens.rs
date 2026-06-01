@@ -139,6 +139,7 @@ fn storage_to_token(stored: StoredToken) -> TokenData {
         id_token: stored.id_token,
         last_refresh_at: stored.last_refresh,
         plan_type,
+        cursor: None,
     }
 }
 

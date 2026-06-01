@@ -120,6 +120,7 @@ fn token_storage_round_trips_provider_files() {
             id_token: None,
             last_refresh_at: None,
             plan_type: None,
+            cursor: None,
         },
     )
     .expect("save anthropic");
@@ -135,6 +136,7 @@ fn token_storage_round_trips_provider_files() {
             id_token: Some(jwt(&serde_json::json!({"email": "bob@example.com"}))),
             last_refresh_at: None,
             plan_type: None,
+            cursor: None,
         },
     )
     .expect("save codex");
@@ -150,6 +152,7 @@ fn token_storage_round_trips_provider_files() {
             id_token: None,
             last_refresh_at: None,
             plan_type: None,
+            cursor: None,
         },
     )
     .expect("save opencode-go");

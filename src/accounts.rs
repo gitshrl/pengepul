@@ -231,6 +231,7 @@ impl AccountManager {
             id_token: refreshed.id_token.or(old_token.id_token),
             last_refresh_at: Some(refresh_at.clone()),
             plan_type: refreshed.plan_type.or(old_token.plan_type),
+            cursor: refreshed.cursor.or(old_token.cursor),
         };
         save_token(&self.auth_dir, &new_token)?;
         if let Some(state) = self.accounts.get_mut(email) {
