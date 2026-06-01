@@ -1,3 +1,9 @@
+use serde_json::Value;
+
+use crate::providers::strip_cursor_prefix;
+
+pub(crate) const CURSOR_DEFAULT_MODEL: &str = "composer-2.5";
+
 pub(crate) fn encode_varint(mut value: u32, out: &mut Vec<u8>) {
     while value >= 0x80 {
         out.push(((value & 0x7f) as u8) | 0x80);
@@ -99,6 +105,111 @@ pub(crate) fn field_bytes(fields: &[RawField], field: u32) -> Option<&[u8]> {
         .and_then(|f| f.bytes.as_deref())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Role {
+    User,
+    Assistant,
+    System,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ChatMessage {
+    pub role: Role,
+    pub content: String,
+}
+
+fn text_from_content(value: &Value) -> String {
+    match value {
+        Value::String(s) => s.clone(),
+        Value::Array(parts) => parts
+            .iter()
+            .filter_map(|p| {
+                p.get("text")
+                    .or_else(|| p.get("input_text"))
+                    .and_then(Value::as_str)
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        Value::Object(_) => value
+            .get("text")
+            .or_else(|| value.get("input_text"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        _ => String::new(),
+    }
+}
+
+#[must_use]
+pub(crate) fn normalize_model(model: &str) -> String {
+    let stripped = strip_cursor_prefix(model).trim();
+    if stripped.is_empty() {
+        CURSOR_DEFAULT_MODEL.to_string()
+    } else {
+        stripped.to_string()
+    }
+}
+
+/// Extract chat turns from a Responses-shaped body. System text (top-level `system`,
+/// `instructions`, or role:"system"/"developer" turns) is concatenated and prepended to the
+/// first user turn — Cursor has no system role.
+#[must_use]
+pub(crate) fn messages_from_body(body: &Value) -> Vec<ChatMessage> {
+    let mut system = Vec::new();
+    let mut turns: Vec<ChatMessage> = Vec::new();
+    let mut push = |role: Role, text: String| {
+        if text.trim().is_empty() {
+            return;
+        }
+        match role {
+            Role::System => system.push(text),
+            r => turns.push(ChatMessage { role: r, content: text }),
+        }
+    };
+    if let Some(s) = body.get("system") {
+        push(Role::System, text_from_content(s));
+    }
+    if let Some(i) = body.get("instructions").filter(|v| !v.is_null()) {
+        push(Role::System, text_from_content(i));
+    }
+    match body.get("input") {
+        Some(Value::String(s)) => push(Role::User, s.clone()),
+        Some(Value::Array(items)) => {
+            for item in items {
+                let role = match item.get("role").and_then(Value::as_str) {
+                    Some("assistant") => Role::Assistant,
+                    Some("system" | "developer") => Role::System,
+                    _ => Role::User,
+                };
+                push(role, text_from_content(item.get("content").unwrap_or(item)));
+            }
+        }
+        _ => {}
+    }
+    if let Some(Value::Array(items)) = body.get("messages") {
+        for item in items {
+            let role = match item.get("role").and_then(Value::as_str) {
+                Some("assistant") => Role::Assistant,
+                Some("system" | "developer") => Role::System,
+                _ => Role::User,
+            };
+            push(role, text_from_content(item.get("content").unwrap_or(&Value::Null)));
+        }
+    }
+    if !system.is_empty() {
+        let prefix = system.join("\n\n");
+        if let Some(first_user) = turns.iter_mut().find(|m| m.role == Role::User) {
+            first_user.content = format!("{prefix}\n\n{}", first_user.content);
+        } else {
+            turns.insert(0, ChatMessage { role: Role::User, content: prefix });
+        }
+    }
+    if turns.is_empty() {
+        turns.push(ChatMessage { role: Role::User, content: String::new() });
+    }
+    turns
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,5 +235,26 @@ mod tests {
         let fields = parse_fields(&buf);
         assert_eq!(field_bytes(&fields, 1).unwrap(), b"hello");
         assert_eq!(fields.iter().find(|f| f.field == 2).unwrap().varint, Some(7));
+    }
+
+    #[test]
+    fn folds_system_into_first_user_turn() {
+        let body = serde_json::json!({
+            "instructions": "be terse",
+            "input": [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "ok"}]
+        });
+        let msgs = messages_from_body(&body);
+        assert_eq!(msgs[0].role, Role::User);
+        assert_eq!(msgs[0].content, "be terse\n\nhi");
+        assert_eq!(msgs[1].role, Role::Assistant);
+        // no system role emitted
+        assert!(msgs.iter().all(|m| m.role != Role::System));
+    }
+
+    #[test]
+    fn normalizes_model() {
+        assert_eq!(normalize_model("cursor/composer-2.5"), "composer-2.5");
+        assert_eq!(normalize_model("cursor/foo"), "foo");
+        assert_eq!(normalize_model("cursor/"), "composer-2.5");
     }
 }
