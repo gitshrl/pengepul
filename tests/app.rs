@@ -819,6 +819,130 @@ async fn cursor_chat_returns_chat_completion_shape() {
 }
 
 #[tokio::test]
+async fn cursor_chat_streams_chat_completion_chunks_and_records_success() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    save_token(tmp.path(), &cursor_token()).expect("save");
+    let upstream = Arc::new(CursorUpstream::default());
+    let app = create_app_with_upstream(config(tmp.path().to_path_buf()), upstream.clone());
+
+    let (status, headers, body) = raw_response(
+        app.clone(),
+        axum::http::Request::builder()
+            .method("POST")
+            .uri("/v1/chat/completions")
+            .header("authorization", "Bearer sk-test")
+            .header("content-type", "application/json")
+            .header("content-length", "1")
+            .body(Body::from(
+                json!({
+                    "model": "cursor/composer-2.5",
+                    "stream": true,
+                    "messages": [{"role": "user", "content": "hi"}]
+                })
+                .to_string(),
+            ))
+            .unwrap(),
+    )
+    .await;
+
+    assert_eq!(status, 200);
+    assert!(
+        headers["content-type"]
+            .to_str()
+            .unwrap()
+            .contains("text/event-stream")
+    );
+    // the cursor Responses-shaped SSE is reshaped into OpenAI chat.completion.chunk frames; the
+    // decoded delta text rides inside one of them, terminated by the SSE [DONE] marker.
+    assert!(body.contains("\"object\":\"chat.completion.chunk\""), "{body}");
+    assert!(body.contains("\"content\":\"hi from cursor\""), "{body}");
+    assert!(body.contains("data: [DONE]"), "{body}");
+    assert_eq!(upstream.calls().len(), 1);
+
+    // response.completed in the cursor stream flips the completion flag, so stream accounting
+    // records a success against the cursor account.
+    let (status, accounts) = json_response(
+        app,
+        axum::http::Request::builder()
+            .method("GET")
+            .uri("/admin/accounts")
+            .header("authorization", "Bearer sk-test")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, 200);
+    let account = &accounts["providers"]["cursor"]["accounts"][0];
+    assert!(
+        account["totalSuccesses"].as_i64().unwrap_or(0) >= 1,
+        "{accounts}"
+    );
+}
+
+#[tokio::test]
+async fn cursor_responses_route_passes_through_response_shape() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    save_token(tmp.path(), &cursor_token()).expect("save");
+    let upstream = Arc::new(CursorUpstream::default());
+    let app = create_app_with_upstream(config(tmp.path().to_path_buf()), upstream.clone());
+
+    let (status, body) = json_response(
+        app,
+        axum::http::Request::builder()
+            .method("POST")
+            .uri("/v1/responses")
+            .header("authorization", "Bearer sk-test")
+            .header("content-type", "application/json")
+            .header("content-length", "1")
+            .body(Body::from(
+                json!({"model": "cursor/composer-2.5", "input": "hi"}).to_string(),
+            ))
+            .unwrap(),
+    )
+    .await;
+
+    assert_eq!(status, 200);
+    // (Cursor, Responses) passes the upstream Responses JSON straight through the shared Codex arm.
+    assert_eq!(body["object"], "response");
+    assert_eq!(body["output"][0]["content"][0]["text"], "hi from cursor");
+    assert_eq!(upstream.calls().len(), 1);
+}
+
+#[tokio::test]
+async fn cursor_messages_route_reshapes_to_anthropic_message() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    save_token(tmp.path(), &cursor_token()).expect("save");
+    let upstream = Arc::new(CursorUpstream::default());
+    let app = create_app_with_upstream(config(tmp.path().to_path_buf()), upstream.clone());
+
+    let (status, body) = json_response(
+        app,
+        axum::http::Request::builder()
+            .method("POST")
+            .uri("/v1/messages")
+            .header("authorization", "Bearer sk-test")
+            .header("content-type", "application/json")
+            .header("content-length", "1")
+            .body(Body::from(
+                json!({
+                    "model": "cursor/composer-2.5",
+                    "messages": [{"role": "user", "content": "hi"}]
+                })
+                .to_string(),
+            ))
+            .unwrap(),
+    )
+    .await;
+
+    assert_eq!(status, 200);
+    // (Cursor, Messages) reshapes the upstream Responses JSON into an Anthropic message via the
+    // shared Codex path (responses_to_anthropic_message).
+    assert_eq!(body["type"], "message");
+    assert_eq!(body["content"][0]["text"], "hi from cursor");
+    assert_eq!(upstream.calls().len(), 1);
+}
+
+#[tokio::test]
 async fn app_models_omits_opencode_go_without_key() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let app = create_app(config(tmp.path().to_path_buf()));
