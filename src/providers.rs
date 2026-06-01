@@ -40,6 +40,10 @@ impl ProviderRegistry {
                 id: ProviderId::OpenCodeGo,
                 native_format: "openai-chat",
             },
+            ProviderId::Cursor => Provider {
+                id: ProviderId::Cursor,
+                native_format: "openai-responses",
+            },
         }
     }
 
@@ -51,6 +55,9 @@ impl ProviderRegistry {
     #[must_use]
     pub fn for_model(&self, model: &str) -> Provider {
         let resolved = resolve_model(Some(model));
+        if cursor_matches_model(&resolved) {
+            return self.get(ProviderId::Cursor);
+        }
         if opencode_go_matches_model(&resolved) {
             return self.get(ProviderId::OpenCodeGo);
         }
@@ -98,6 +105,20 @@ fn opencode_go_matches_model(model: &str) -> bool {
     model.starts_with(OPENCODE_GO_PREFIX)
 }
 
+pub const CURSOR_PREFIX: &str = "cursor/";
+
+/// Cursor-native models advertised on `/v1/models`. Routing accepts any `cursor/<sku>`.
+pub const CURSOR_MODELS: [&str; 1] = ["composer-2.5"];
+
+#[must_use]
+pub fn strip_cursor_prefix(model: &str) -> &str {
+    model.strip_prefix(CURSOR_PREFIX).unwrap_or(model)
+}
+
+fn cursor_matches_model(model: &str) -> bool {
+    model.starts_with(CURSOR_PREFIX)
+}
+
 #[must_use]
 pub fn build_registry(_auth_dir: &Path) -> ProviderRegistry {
     ProviderRegistry {
@@ -113,6 +134,10 @@ pub fn build_registry(_auth_dir: &Path) -> ProviderRegistry {
             Provider {
                 id: ProviderId::OpenCodeGo,
                 native_format: "openai-chat",
+            },
+            Provider {
+                id: ProviderId::Cursor,
+                native_format: "openai-responses",
             },
         ],
     }
@@ -132,7 +157,7 @@ fn anthropic_matches_model(model: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_registry, strip_opencode_go_prefix};
+    use super::{build_registry, strip_cursor_prefix, strip_opencode_go_prefix};
     use crate::types::ProviderId;
     use std::path::Path;
 
@@ -159,5 +184,19 @@ mod tests {
             "kimi-k2.6"
         );
         assert_eq!(strip_opencode_go_prefix("kimi-k2.6"), "kimi-k2.6");
+    }
+
+    #[test]
+    fn routes_cursor_prefix() {
+        let registry = build_registry(Path::new("/tmp"));
+        assert_eq!(
+            registry.for_model("cursor/composer-2.5").id,
+            ProviderId::Cursor
+        );
+        assert_eq!(registry.for_model("cursor/anything").id, ProviderId::Cursor);
+        // bare names never hijack other providers
+        assert_eq!(registry.for_model("composer-2.5").id, ProviderId::Anthropic);
+        assert_eq!(strip_cursor_prefix("cursor/composer-2.5"), "composer-2.5");
+        assert_eq!(strip_cursor_prefix("composer-2.5"), "composer-2.5");
     }
 }
