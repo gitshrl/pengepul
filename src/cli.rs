@@ -114,6 +114,7 @@ pub trait CliRuntime {
         provider: ProviderId,
         manual: bool,
         key: Option<&str>,
+        import_local: bool,
     ) -> Result<String>;
 }
 
@@ -142,13 +143,16 @@ enum Command {
     Login {
         #[arg(long = "config")]
         command_config: Option<PathBuf>,
-        #[arg(long, default_value = "anthropic", value_parser = ["anthropic", "codex", "opencode-go"])]
+        #[arg(long, default_value = "anthropic", value_parser = ["anthropic", "codex", "opencode-go", "cursor"])]
         provider: String,
         #[arg(long)]
         manual: bool,
         /// opencode-go API key (defaults to importing it from opencode's auth.json)
         #[arg(long)]
         key: Option<String>,
+        /// import the locally installed Cursor desktop login instead of the browser flow
+        #[arg(long = "cursor-import-local")]
+        cursor_import_local: bool,
     },
     /// show local server status
     Status {
@@ -305,12 +309,14 @@ pub fn run_with_env(
             provider,
             manual,
             key,
+            cursor_import_local,
         }) => {
             login(
                 command_config.as_deref().or(parsed_args.config.as_deref()),
                 &provider,
                 manual,
                 key.as_deref(),
+                cursor_import_local,
                 home,
                 cwd,
                 runtime,
@@ -466,6 +472,7 @@ fn login(
     provider: &str,
     manual: bool,
     key: Option<&str>,
+    import_local: bool,
     home: &Path,
     cwd: &Path,
     runtime: &mut impl CliRuntime,
@@ -476,7 +483,13 @@ fn login(
     if provider == ProviderId::OpenCodeGo && manual {
         bail!("--manual is not supported for opencode-go (it uses a static API key, not OAuth)");
     }
-    let email = runtime.login(&config, provider, manual, key)?;
+    if provider != ProviderId::Cursor && import_local {
+        bail!("--cursor-import-local is only valid with --provider cursor");
+    }
+    if provider == ProviderId::Cursor && manual {
+        bail!("--manual is not supported for cursor");
+    }
+    let email = runtime.login(&config, provider, manual, key, import_local)?;
     output.line(&format!("saved {provider} account token for {email}"));
     Ok(())
 }

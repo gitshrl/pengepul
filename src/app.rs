@@ -426,9 +426,7 @@ fn build_account_managers(config: &Config) -> AccountManagers {
     let mut cursor = AccountManager::new(
         config.auth_dir.clone(),
         ProviderId::Cursor,
-        |_refresh_token| {
-            Box::pin(async { anyhow::bail!("cursor refresh not yet implemented") }) as RefreshFuture
-        },
+        |refresh_token| Box::pin(crate::cursor_auth::refresh_cursor_tokens(refresh_token)),
         RefreshPolicy {
             kind: RefreshPolicyKind::ExpiresLead,
             seconds: 600,

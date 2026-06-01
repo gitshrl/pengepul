@@ -31,6 +31,7 @@ struct FakeRuntime {
     login_provider: Option<ProviderId>,
     login_manual: Option<bool>,
     login_key: Option<String>,
+    login_import_local: Option<bool>,
 }
 
 impl CliRuntime for FakeRuntime {
@@ -113,10 +114,12 @@ impl CliRuntime for FakeRuntime {
         provider: ProviderId,
         manual: bool,
         key: Option<&str>,
+        import_local: bool,
     ) -> Result<String> {
         self.login_provider = Some(provider);
         self.login_manual = Some(manual);
         self.login_key = key.map(ToOwned::to_owned);
+        self.login_import_local = Some(import_local);
         Ok(format!("{provider}@example.com"))
     }
 }
@@ -339,6 +342,26 @@ fn login_delegates_provider_and_manual_mode() {
     assert_eq!(
         outcome.stdout.trim(),
         "saved codex account token for codex@example.com"
+    );
+}
+
+#[test]
+fn login_cursor_import_local_routes_through_runtime() {
+    let tmp = tempdir().expect("tempdir");
+    write_config(tmp.path(), "127.0.0.1", 8317);
+    let mut runtime = FakeRuntime::default();
+
+    let outcome = run(
+        &["login", "--provider", "cursor", "--cursor-import-local"],
+        tmp.path(),
+        &mut runtime,
+    );
+
+    assert_eq!(runtime.login_provider, Some(ProviderId::Cursor));
+    assert_eq!(runtime.login_import_local, Some(true));
+    assert_eq!(
+        outcome.stdout.trim(),
+        "saved cursor account token for cursor@example.com"
     );
 }
 

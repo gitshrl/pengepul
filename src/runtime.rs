@@ -130,7 +130,28 @@ impl CliRuntime for RealRuntime {
         provider: ProviderId,
         manual: bool,
         key: Option<&str>,
+        import_local: bool,
     ) -> Result<String> {
+        if provider == ProviderId::Cursor {
+            let token = if import_local {
+                let home = home_dir()?;
+                crate::cursor_auth::import_cursor_local(
+                    &crate::cursor_auth::default_cursor_storage_path(&home),
+                )?
+            } else {
+                let pkce = crate::cursor_auth::generate_cursor_pkce();
+                let url = crate::cursor_auth::build_cursor_login_url(&pkce);
+                println!("\nOpen this URL to authorize cursor:\n\n{url}\n");
+                if !manual {
+                    open_browser(&url);
+                }
+                self.runtime
+                    .block_on(crate::cursor_auth::poll_cursor_auth(&pkce))?
+            };
+            let email = token.email.clone();
+            save_token(&config.auth_dir, &token)?;
+            return Ok(email);
+        }
         if provider == ProviderId::OpenCodeGo {
             return save_opencode_go_login(config, key);
         }
