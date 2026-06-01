@@ -6,18 +6,7 @@
 
 ## Install
 
-Download a prebuilt binary from the latest GitHub Release:
-
-```bash
-curl -L https://github.com/gitshrl/pengepul/releases/latest/download/pengepul-x86_64-unknown-linux-gnu.tar.gz | tar -xz
-```
-
-Release archives are published for:
-
-- `x86_64-unknown-linux-gnu`
-- `aarch64-apple-darwin`
-
-Or install the command from source with Cargo:
+Install the command from source with Cargo:
 
 ```bash
 cargo install --git https://github.com/gitshrl/pengepul.git --locked
@@ -145,16 +134,6 @@ Run the Rust quality gates:
 cargo fmt --check
 cargo test --locked
 cargo clippy --locked --all-targets --all-features -- -D warnings
-```
-
-## Release
-
-Releases are built from `v*` tags by GitHub Actions. The tag should match the Cargo package
-version:
-
-```bash
-git tag v0.1.0
-git push origin v0.1.0
 ```
 
 ## Logging
