@@ -1,6 +1,11 @@
-use serde_json::Value;
+use std::collections::BTreeMap;
 
+use serde_json::Value;
+use sha2::{Digest, Sha256};
+
+use crate::config::Config;
 use crate::providers::strip_cursor_prefix;
+use crate::types::AvailableAccount;
 
 pub(crate) const CURSOR_DEFAULT_MODEL: &str = "composer-2.5";
 
@@ -304,6 +309,118 @@ pub(crate) fn encode_cursor_chat_request(body: &Value) -> Vec<u8> {
     connect_frame(&wrapped)
 }
 
+pub(crate) const URL_SAFE_BASE64: &[u8] =
+    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+fn sha256_hex(input: &str) -> String {
+    use std::fmt::Write as _;
+    Sha256::digest(input.as_bytes()).iter().fold(String::new(), |mut acc, b| {
+        let _ = write!(acc, "{b:02x}");
+        acc
+    })
+}
+
+fn jyh_encode(bytes: &[u8]) -> String {
+    let mut out = String::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        let a = bytes[i];
+        let b = if i + 1 < bytes.len() { bytes[i + 1] } else { 0 };
+        let c = if i + 2 < bytes.len() { bytes[i + 2] } else { 0 };
+        out.push(URL_SAFE_BASE64[(a >> 2) as usize] as char);
+        out.push(URL_SAFE_BASE64[(((a & 3) << 4) | (b >> 4)) as usize] as char);
+        if i + 1 < bytes.len() {
+            out.push(URL_SAFE_BASE64[(((b & 15) << 2) | (c >> 6)) as usize] as char);
+        }
+        if i + 2 < bytes.len() {
+            out.push(URL_SAFE_BASE64[(c & 63) as usize] as char);
+        }
+        i += 3;
+    }
+    out
+}
+
+#[must_use]
+pub(crate) fn build_cursor_checksum(token: &str, machine_id: &str) -> String {
+    let stable = if machine_id.is_empty() {
+        sha256_hex(&format!("{token}machineId"))
+    } else {
+        machine_id.to_string()
+    };
+    let timestamp = u64::try_from(chrono::Utc::now().timestamp_millis() / 1_000_000).unwrap_or(0);
+    let mut buf = [
+        ((timestamp >> 40) & 0xff) as u8,
+        ((timestamp >> 32) & 0xff) as u8,
+        ((timestamp >> 24) & 0xff) as u8,
+        ((timestamp >> 16) & 0xff) as u8,
+        ((timestamp >> 8) & 0xff) as u8,
+        (timestamp & 0xff) as u8,
+    ];
+    let mut prev: u8 = 165;
+    for (i, byte) in buf.iter_mut().enumerate() {
+        *byte = (*byte ^ prev).wrapping_add(u8::try_from(i % 256).unwrap_or(0));
+        prev = *byte;
+    }
+    format!("{}{stable}", jyh_encode(&buf))
+}
+
+#[must_use]
+pub(crate) fn cursor_headers(account: &AvailableAccount, _config: &Config) -> BTreeMap<String, String> {
+    let token = &account.token.access_token;
+    let meta = account.token.cursor.as_ref();
+    let machine_id = meta.and_then(|m| m.service_machine_id.clone()).unwrap_or_else(|| {
+        if account.account_uuid.is_empty() {
+            account.device_id.clone()
+        } else {
+            account.account_uuid.clone()
+        }
+    });
+    let client_version = meta.map_or_else(
+        || crate::cursor_auth::CURSOR_DEFAULT_CLIENT_VERSION.to_string(),
+        |m| {
+            if m.client_version.is_empty() {
+                crate::cursor_auth::CURSOR_DEFAULT_CLIENT_VERSION.to_string()
+            } else {
+                m.client_version.clone()
+            }
+        },
+    );
+    let config_version = meta.map_or_else(
+        || uuid::Uuid::new_v4().to_string(),
+        |m| {
+            if m.config_version.is_empty() {
+                uuid::Uuid::new_v4().to_string()
+            } else {
+                m.config_version.clone()
+            }
+        },
+    );
+    let session_id = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_DNS, token.as_bytes()).to_string();
+    let os = if cfg!(target_os = "macos") {
+        "macos"
+    } else if cfg!(target_os = "windows") {
+        "windows"
+    } else {
+        "linux"
+    };
+    BTreeMap::from([
+        ("Authorization".into(), format!("Bearer {token}")),
+        ("Content-Type".into(), "application/connect+proto".into()),
+        ("Accept".into(), "application/connect+proto".into()),
+        ("Connect-Protocol-Version".into(), "1".into()),
+        ("User-Agent".into(), "connect-es/1.6.1".into()),
+        ("x-client-key".into(), sha256_hex(token)),
+        ("x-cursor-checksum".into(), build_cursor_checksum(token, &machine_id)),
+        ("x-cursor-client-version".into(), client_version),
+        ("x-cursor-client-type".into(), "ide".into()),
+        ("x-cursor-client-os".into(), os.into()),
+        ("x-cursor-config-version".into(), config_version),
+        ("x-ghost-mode".into(), "true".into()),
+        ("x-session-id".into(), session_id),
+        ("x-request-id".into(), uuid::Uuid::new_v4().to_string()),
+    ])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -369,5 +486,13 @@ mod tests {
         let model_fields = parse_fields(model_msg);
         let model_name = field_bytes(&model_fields, 1).expect("model name");
         assert_eq!(model_name, b"composer-2.5");
+    }
+
+    #[test]
+    fn checksum_ends_with_machine_id_and_uses_url_safe_alphabet() {
+        let checksum = build_cursor_checksum("token-abc", "machine-1");
+        assert!(checksum.ends_with("machine-1"), "{checksum}");
+        let prefix = &checksum[..checksum.len() - "machine-1".len()];
+        assert!(prefix.bytes().all(|b| URL_SAFE_BASE64.contains(&b)), "{prefix}");
     }
 }
