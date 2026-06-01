@@ -562,10 +562,9 @@ async fn models(State(state): State<AppState>, headers: HeaderMap) -> Response {
     .filter(|(provider, _)| match provider {
         ProviderId::Anthropic => has_anthropic,
         ProviderId::Codex => has_codex,
-        // opencode-go has no entry in this seed list; its models are appended below.
-        ProviderId::OpenCodeGo => false,
-        // cursor has no entry in this seed list; its models are appended below.
-        ProviderId::Cursor => false,
+        // opencode-go and cursor have no entries in this seed list; their models are
+        // appended below.
+        ProviderId::OpenCodeGo | ProviderId::Cursor => false,
     })
     .map(|(provider, id)| {
         json!({
