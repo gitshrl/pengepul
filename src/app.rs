@@ -44,6 +44,10 @@ use crate::utils::now_iso;
 const RATE_LIMIT_WINDOW: Duration = Duration::from_mins(1);
 const RATE_LIMIT_MAX: u32 = 60;
 
+/// Upper bound on the upstream Cursor response buffered before decoding. Cursor chat responses are
+/// text (KB); this only guards against a runaway/adversarial upstream exhausting proxy memory.
+const CURSOR_MAX_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
+
 pub type UpstreamFuture =
     Pin<Box<dyn Future<Output = anyhow::Result<UpstreamJsonResponse>> + Send>>;
 pub type UpstreamSseStream = Pin<Box<dyn Stream<Item = anyhow::Result<Bytes>> + Send>>;
@@ -371,10 +375,15 @@ impl UpstreamClient for HttpUpstreamClient {
             let mut buf = Vec::new();
             while let Some(chunk) = body.next().await {
                 buf.extend_from_slice(&chunk?);
+                if buf.len() > CURSOR_MAX_RESPONSE_BYTES {
+                    anyhow::bail!("cursor upstream response exceeded {CURSOR_MAX_RESPONSE_BYTES} bytes");
+                }
             }
             if !status.is_success() {
+                // Preserve the real upstream status so failure classification (401 auth /
+                // 429 rate_limit / 5xx server) works; collapsing to 502 would misclassify all of them.
                 return Ok(UpstreamJsonResponse {
-                    status: StatusCode::BAD_GATEWAY,
+                    status,
                     body: json!({"error": {"message": String::from_utf8_lossy(&buf)}}),
                 });
             }
@@ -424,13 +433,26 @@ impl UpstreamClient for HttpUpstreamClient {
                 let mut buf = Vec::new();
                 while let Some(chunk) = raw.next().await {
                     buf.extend_from_slice(&chunk?);
+                    if buf.len() > CURSOR_MAX_RESPONSE_BYTES {
+                        Err(anyhow::anyhow!(
+                            "cursor upstream response exceeded {CURSOR_MAX_RESPONSE_BYTES} bytes"
+                        ))?;
+                    }
                 }
                 let decoded = crate::cursor::decode_cursor_response(&buf);
-                for event in crate::cursor::responses_sse_from_decoded(
-                    &decoded.text,
-                    &decoded.reasoning,
-                    &model_for_stream,
-                ) {
+                // An in-band Connect error on an HTTP 200 must surface as a failure, not a silent
+                // empty success: emit response.failed (no response.completed) so the stream
+                // pipeline records a failure for the account instead of a phantom success.
+                let events = if let Some(error) = decoded.error {
+                    crate::cursor::responses_sse_error(&model_for_stream, &error)
+                } else {
+                    crate::cursor::responses_sse_from_decoded(
+                        &decoded.text,
+                        &decoded.reasoning,
+                        &model_for_stream,
+                    )
+                };
+                for event in events {
                     yield Bytes::from(event);
                 }
             });

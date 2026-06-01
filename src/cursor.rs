@@ -52,11 +52,16 @@ fn decode_varint(data: &[u8], pos: usize) -> (u64, usize) {
     while p < data.len() {
         let b = data[p];
         p += 1;
-        value |= u64::from(b & 0x7f) << shift;
+        // A u64 varint is at most 10 bytes (shifts 0..=63). Past that, keep consuming
+        // continuation bytes to stay byte-aligned, but stop shifting to avoid the `<< >=64`
+        // overflow panic (debug) / silent wrap (release) on malformed upstream input.
+        if shift < 64 {
+            value |= u64::from(b & 0x7f) << shift;
+            shift += 7;
+        }
         if b & 0x80 == 0 {
             break;
         }
-        shift += 7;
     }
     (value, p)
 }
@@ -406,6 +411,11 @@ pub(crate) fn cursor_headers(account: &AvailableAccount, _config: &Config) -> BT
     } else {
         "linux"
     };
+    let arch = match std::env::consts::ARCH {
+        "aarch64" => "arm64",
+        "x86_64" => "x64",
+        other => other,
+    };
     BTreeMap::from([
         ("Authorization".into(), format!("Bearer {token}")),
         ("Content-Type".into(), "application/connect+proto".into()),
@@ -417,10 +427,13 @@ pub(crate) fn cursor_headers(account: &AvailableAccount, _config: &Config) -> BT
         ("x-cursor-client-version".into(), client_version),
         ("x-cursor-client-type".into(), "ide".into()),
         ("x-cursor-client-os".into(), os.into()),
+        ("x-cursor-client-arch".into(), arch.into()),
+        ("x-cursor-client-device-type".into(), "desktop".into()),
         ("x-cursor-config-version".into(), config_version),
         ("x-ghost-mode".into(), "true".into()),
         ("x-session-id".into(), session_id),
         ("x-request-id".into(), uuid::Uuid::new_v4().to_string()),
+        ("x-amzn-trace-id".into(), uuid::Uuid::new_v4().to_string()),
     ])
 }
 
@@ -453,6 +466,11 @@ fn read_connect_frames(data: &[u8]) -> Vec<Frame> {
             let mut decoded = Vec::new();
             if GzDecoder::new(&payload[..]).read_to_end(&mut decoded).is_ok() {
                 payload = decoded;
+            } else {
+                // Don't silently reinterpret still-compressed bytes as protobuf (yields empty
+                // output with no signal); skip the frame and make the failure observable.
+                tracing::warn!("cursor: failed to gunzip a connect frame; skipping it");
+                continue;
             }
         }
         frames.push(Frame { kind, payload });
@@ -500,7 +518,10 @@ fn extract_inner_text(payload: &[u8], depth: u8) -> String {
     acc
 }
 
-fn extract_from_payload(payload: &[u8], text: &mut String, reasoning: &mut String) {
+fn extract_from_payload(payload: &[u8], text: &mut String, reasoning: &mut String, depth: u8) {
+    if depth > 8 {
+        return; // bound recursion: a crafted chain of nested fields must not overflow the stack
+    }
     for f in parse_fields(payload) {
         let Some(bytes) = f.bytes else { continue };
         if f.field == 25 {
@@ -513,7 +534,7 @@ fn extract_from_payload(payload: &[u8], text: &mut String, reasoning: &mut Strin
         } else if (f.field == 2 || bytes.len() > 1)
             && bytes.first().is_some_and(|&b| looks_like_proto_start(b))
         {
-            extract_from_payload(&bytes, text, reasoning);
+            extract_from_payload(&bytes, text, reasoning, depth + 1);
         }
     }
 }
@@ -547,7 +568,7 @@ pub(crate) fn decode_cursor_response(data: &[u8]) -> CursorDecoded {
     let mut out = CursorDecoded::default();
     for frame in read_connect_frames(data) {
         if frame.kind == 0 || frame.kind == 1 {
-            extract_from_payload(&frame.payload, &mut out.text, &mut out.reasoning);
+            extract_from_payload(&frame.payload, &mut out.text, &mut out.reasoning, 0);
         } else if (frame.kind == 2 || frame.kind == 3)
             && let Some(err) = extract_json_error(&frame.payload)
         {
@@ -619,6 +640,26 @@ pub(crate) fn responses_sse_from_decoded(text: &str, reasoning: &str, model: &st
                 "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}}}),
     ));
     out
+}
+
+/// Build a Responses-API SSE sequence for an in-band Cursor error (a Connect error frame on an
+/// HTTP 200). It deliberately emits NO `response.completed`, so the streaming pipeline records the
+/// request as a failure (the `completed` flag stays false) instead of a silent success.
+#[must_use]
+pub(crate) fn responses_sse_error(model: &str, message: &str) -> Vec<String> {
+    vec![
+        sse_event(
+            "response.created",
+            &json!({"type": "response.created",
+                "response": {"id": "resp_stream", "object": "response", "model": model, "status": "in_progress", "output": []}}),
+        ),
+        sse_event(
+            "response.failed",
+            &json!({"type": "response.failed",
+                "response": {"id": "resp_stream", "object": "response", "model": model, "status": "failed",
+                    "error": {"message": message}}}),
+        ),
+    ]
 }
 
 #[cfg(test)]
@@ -751,6 +792,37 @@ mod tests {
         let decoded = decode_cursor_response(&frame);
         assert_eq!(decoded.text, "done");
         assert_eq!(decoded.reasoning, "İ思考");
+    }
+
+    #[test]
+    fn decode_bounds_recursion_on_deeply_nested_fields() {
+        // Deeply nested field-2 wrappers must not overflow the stack (depth cap stops the walk).
+        let mut buf = Vec::new();
+        encode_bytes_field(1, b"x", &mut buf);
+        for _ in 0..5000 {
+            let mut next = Vec::new();
+            encode_bytes_field(2, &buf, &mut next);
+            buf = next;
+        }
+        let frame = connect_frame(&buf);
+        let _ = decode_cursor_response(&frame); // must return without panicking
+    }
+
+    #[test]
+    fn decode_handles_overlong_varint_without_panic() {
+        // 12 continuation bytes would drive the varint shift past 64 and panic without the bound.
+        let mut payload = vec![0xFF_u8; 12];
+        payload.push(0x01);
+        let frame = connect_frame(&payload);
+        let _ = decode_cursor_response(&frame); // must not panic
+    }
+
+    #[test]
+    fn error_sse_emits_failed_without_completed() {
+        let joined = responses_sse_error("composer-2.5", "boom").join("");
+        assert!(joined.contains("response.failed"), "{joined}");
+        assert!(joined.contains("boom"), "{joined}");
+        assert!(!joined.contains("response.completed"), "{joined}");
     }
 
     #[test]
