@@ -2,6 +2,8 @@ pub mod accounts;
 pub mod app;
 pub mod cli;
 pub mod config;
+pub mod cursor;
+pub mod cursor_auth;
 pub mod oauth;
 pub mod providers;
 pub mod runtime;
