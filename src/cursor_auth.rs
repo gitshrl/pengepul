@@ -71,6 +71,19 @@ pub async fn refresh_cursor_tokens(refresh_token: String) -> Result<TokenData> {
             RefreshTokenExhaustedError::new("invalidated", Some(status.as_u16()), Some(body)).into(),
         );
     }
+    token_from_refresh_response(&data, refresh_token)
+}
+
+/// Build the refreshed `TokenData` from a `/oauth/token` response body.
+///
+/// `cursor` is `None` on purpose: the refresh response carries no client metadata, and
+/// `AccountManager::refresh_account` merges with `refreshed.cursor.or(old_token.cursor)` — so
+/// returning `None` here is exactly what preserves the stored machine id / client+config version
+/// across refreshes. Returning `Some(..)` would shadow and discard the stored metadata.
+///
+/// # Errors
+/// Returns an error when the response has no `access_token`.
+fn token_from_refresh_response(data: &Value, refresh_token: String) -> Result<TokenData> {
     let access_token = data
         .get("access_token")
         .and_then(Value::as_str)
@@ -83,7 +96,7 @@ pub async fn refresh_cursor_tokens(refresh_token: String) -> Result<TokenData> {
     Ok(TokenData {
         access_token: access_token.clone(),
         refresh_token: new_refresh,
-        email: String::new(), // preserved by AccountManager from the old token
+        email: String::new(),        // preserved by AccountManager from the old token
         expires_at: expiry_from_jwt(&access_token),
         account_uuid: String::new(), // preserved by AccountManager
         provider: ProviderId::Cursor,
@@ -93,12 +106,7 @@ pub async fn refresh_cursor_tokens(refresh_token: String) -> Result<TokenData> {
             .map(ToOwned::to_owned),
         last_refresh_at: None,
         plan_type: None,
-        cursor: Some(CursorMeta {
-            service_machine_id: None,
-            client_version: CURSOR_DEFAULT_CLIENT_VERSION.to_string(),
-            config_version: String::new(),
-            client_id: CURSOR_CLIENT_ID.to_string(),
-        }),
+        cursor: None,
     })
 }
 
@@ -356,6 +364,31 @@ mod tests {
         let body = std::str::from_utf8(req.body().unwrap().as_bytes().unwrap()).unwrap();
         assert!(body.contains("\"grant_type\":\"refresh_token\""), "{body}");
         assert!(body.contains("\"refresh_token\":\"rt-123\""), "{body}");
+    }
+
+    #[test]
+    fn refresh_response_token_carries_no_cursor_meta() {
+        // Regression: refresh must return cursor: None so AccountManager's
+        // `refreshed.cursor.or(old_token.cursor)` keeps the stored machine id / config version.
+        // Returning Some(..) here would discard them on the first refresh.
+        let token = token_from_refresh_response(
+            &serde_json::json!({"access_token": "new-jwt", "refresh_token": "new-rt"}),
+            "old-rt".to_string(),
+        )
+        .expect("token");
+        assert_eq!(token.access_token, "new-jwt");
+        assert_eq!(token.refresh_token, "new-rt");
+        assert!(token.cursor.is_none());
+    }
+
+    #[test]
+    fn refresh_response_keeps_old_refresh_token_when_absent() {
+        let token = token_from_refresh_response(
+            &serde_json::json!({"access_token": "new-jwt"}),
+            "old-rt".to_string(),
+        )
+        .expect("token");
+        assert_eq!(token.refresh_token, "old-rt");
     }
 
     #[test]

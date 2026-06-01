@@ -67,6 +67,78 @@ async fn since_last_refresh_refreshes_legacy_token_without_last_refresh() {
 }
 
 #[tokio::test]
+async fn cursor_refresh_preserves_stored_metadata() {
+    use pengepul::tokens::load_all_tokens;
+    use pengepul::types::ProviderId;
+
+    let tmp = tempdir().expect("tempdir");
+    fs::write(
+        tmp.path().join("cursor-u_cursor_local.json"),
+        json!({
+            "access_token": "old-access",
+            "refresh_token": "old-refresh",
+            "email": "u@cursor.local",
+            "type": "cursor",
+            "expired": "2020-01-01T00:00:00Z",
+            "account_uuid": "machine-1",
+            "cursor_service_machine_id": "machine-1",
+            "cursor_client_version": "cli-stored",
+            "cursor_config_version": "cfg-stored",
+            "cursor_client_id": "cid-stored"
+        })
+        .to_string(),
+    )
+    .expect("write token");
+
+    // Mimic refresh_cursor_tokens: empty email/account_uuid and cursor: None, so the manager's
+    // `refreshed.cursor.or(old_token.cursor)` must fall back to the stored metadata.
+    let mut manager = AccountManager::new(
+        tmp.path().to_path_buf(),
+        ProviderId::Cursor,
+        move |_refresh_token| {
+            Box::pin(async move {
+                Ok(TokenData {
+                    access_token: "new-access".to_string(),
+                    refresh_token: "new-refresh".to_string(),
+                    email: String::new(),
+                    expires_at: "2031-01-01T00:00:00Z".to_string(),
+                    account_uuid: String::new(),
+                    provider: ProviderId::Cursor,
+                    id_token: None,
+                    last_refresh_at: None,
+                    plan_type: None,
+                    cursor: None,
+                })
+            })
+        },
+        RefreshPolicy {
+            kind: RefreshPolicyKind::ExpiresLead,
+            seconds: 600,
+        },
+    );
+    manager.load().expect("load accounts");
+    assert!(
+        manager
+            .refresh_account("u@cursor.local")
+            .await
+            .expect("refresh")
+    );
+
+    // Reload from disk to prove the preserved metadata was persisted, not just held in memory.
+    let tokens = load_all_tokens(tmp.path(), Some(ProviderId::Cursor)).expect("load");
+    let token = tokens
+        .into_iter()
+        .find(|t| t.email == "u@cursor.local")
+        .expect("cursor token present");
+    assert_eq!(token.access_token, "new-access");
+    assert_eq!(token.refresh_token, "new-refresh");
+    let meta = token.cursor.expect("cursor metadata preserved across refresh");
+    assert_eq!(meta.service_machine_id.as_deref(), Some("machine-1"));
+    assert_eq!(meta.config_version, "cfg-stored");
+    assert_eq!(meta.client_version, "cli-stored");
+}
+
+#[tokio::test]
 async fn exhausted_refresh_token_marks_account_for_reauth() {
     let tmp = tempdir().expect("tempdir");
     fs::write(
