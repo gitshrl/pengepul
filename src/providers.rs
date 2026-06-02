@@ -36,8 +36,8 @@ impl ProviderRegistry {
                 id: ProviderId::Codex,
                 native_format: "openai-responses",
             },
-            ProviderId::OpenCodeGo => Provider {
-                id: ProviderId::OpenCodeGo,
+            ProviderId::Opencode => Provider {
+                id: ProviderId::Opencode,
                 native_format: "openai-chat",
             },
         }
@@ -51,8 +51,8 @@ impl ProviderRegistry {
     #[must_use]
     pub fn for_model(&self, model: &str) -> Provider {
         let resolved = resolve_model(Some(model));
-        if opencode_go_matches_model(&resolved) {
-            return self.get(ProviderId::OpenCodeGo);
+        if opencode_matches_model(&resolved) {
+            return self.get(ProviderId::Opencode);
         }
         let codex = self.get(ProviderId::Codex);
         let anthropic = self.get(ProviderId::Anthropic);
@@ -66,15 +66,11 @@ impl ProviderRegistry {
     }
 }
 
-/// Prefix that routes a model to the opencode-go provider, e.g. `opencode-go/glm-5.1`.
-pub const OPENCODE_GO_PREFIX: &str = "opencode-go/";
-
-/// Shorthand alias accepted on input: clients naturally write `opencode/` since the upstream
-/// service is opencode.ai. `/v1/models` still advertises the canonical `opencode-go/` form.
+/// Prefix that routes a model to the opencode provider, e.g. `opencode/glm-5.1`.
 pub const OPENCODE_PREFIX: &str = "opencode/";
 
-/// Model ids served by opencode-go (from the models.dev catalog), reported on `/v1/models`.
-pub const OPENCODE_GO_MODELS: [&str; 15] = [
+/// Model ids served by opencode (from the models.dev catalog), reported on `/v1/models`.
+pub const OPENCODE_MODELS: [&str; 15] = [
     "glm-5.1",
     "glm-5",
     "kimi-k2.6",
@@ -94,7 +90,7 @@ pub const OPENCODE_GO_MODELS: [&str; 15] = [
 
 /// Free-tier model ids served by opencode zen, reported on `/v1/models`. Unlike the paid
 /// go-plan models these route to the credits endpoint (`/zen/v1`) rather than `/zen/go/v1`.
-pub const OPENCODE_GO_FREE_MODELS: [&str; 5] = [
+pub const OPENCODE_FREE_MODELS: [&str; 5] = [
     "deepseek-v4-flash-free",
     "mimo-v2.5-free",
     "qwen3.6-plus-free",
@@ -102,24 +98,20 @@ pub const OPENCODE_GO_FREE_MODELS: [&str; 5] = [
     "nemotron-3-super-free",
 ];
 
-/// Strip the opencode routing prefix (canonical `opencode-go/` or the `opencode/` alias) to
-/// get the upstream model id.
+/// Strip the `opencode/` routing prefix to get the upstream model id.
 #[must_use]
-pub fn strip_opencode_go_prefix(model: &str) -> &str {
-    model
-        .strip_prefix(OPENCODE_GO_PREFIX)
-        .or_else(|| model.strip_prefix(OPENCODE_PREFIX))
-        .unwrap_or(model)
+pub fn strip_opencode_prefix(model: &str) -> &str {
+    model.strip_prefix(OPENCODE_PREFIX).unwrap_or(model)
 }
 
-/// True when `model` (with or without the `opencode-go/` prefix) is a free-tier zen model.
+/// True when `model` (with or without the `opencode/` prefix) is a free-tier zen model.
 #[must_use]
-pub fn is_opencode_go_free_model(model: &str) -> bool {
-    OPENCODE_GO_FREE_MODELS.contains(&strip_opencode_go_prefix(model))
+pub fn is_opencode_free_model(model: &str) -> bool {
+    OPENCODE_FREE_MODELS.contains(&strip_opencode_prefix(model))
 }
 
-fn opencode_go_matches_model(model: &str) -> bool {
-    model.starts_with(OPENCODE_GO_PREFIX) || model.starts_with(OPENCODE_PREFIX)
+fn opencode_matches_model(model: &str) -> bool {
+    model.starts_with(OPENCODE_PREFIX)
 }
 
 #[must_use]
@@ -135,7 +127,7 @@ pub fn build_registry(_auth_dir: &Path) -> ProviderRegistry {
                 native_format: "openai-responses",
             },
             Provider {
-                id: ProviderId::OpenCodeGo,
+                id: ProviderId::Opencode,
                 native_format: "openai-chat",
             },
         ],
@@ -156,23 +148,22 @@ fn anthropic_matches_model(model: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_registry, strip_opencode_go_prefix};
+    use super::{build_registry, strip_opencode_prefix};
     use crate::types::ProviderId;
     use std::path::Path;
 
     #[test]
-    fn routes_opencode_go_prefix() {
+    fn routes_opencode_prefix() {
         let registry = build_registry(Path::new("/tmp"));
         assert_eq!(
-            registry.for_model("opencode-go/glm-5.1").id,
-            ProviderId::OpenCodeGo
+            registry.for_model("opencode/glm-5.1").id,
+            ProviderId::Opencode
         );
-        // the `opencode/` alias routes to the same provider, not the anthropic fallback.
         assert_eq!(
             registry.for_model("opencode/deepseek-v4-flash-free").id,
-            ProviderId::OpenCodeGo
+            ProviderId::Opencode
         );
-        // a bare opencode-go model id (no prefix) must NOT hijack other providers.
+        // a bare opencode model id (no prefix) must NOT hijack other providers.
         assert_eq!(registry.for_model("glm-5.1").id, ProviderId::Anthropic);
         assert_eq!(
             registry.for_model("claude-sonnet-4-6").id,
@@ -183,26 +174,22 @@ mod tests {
 
     #[test]
     fn strips_prefix_for_upstream() {
+        assert_eq!(strip_opencode_prefix("opencode/kimi-k2.6"), "kimi-k2.6");
         assert_eq!(
-            strip_opencode_go_prefix("opencode-go/kimi-k2.6"),
-            "kimi-k2.6"
-        );
-        // the `opencode/` alias is stripped to the same bare upstream id.
-        assert_eq!(
-            strip_opencode_go_prefix("opencode/deepseek-v4-flash-free"),
+            strip_opencode_prefix("opencode/deepseek-v4-flash-free"),
             "deepseek-v4-flash-free"
         );
-        assert_eq!(strip_opencode_go_prefix("kimi-k2.6"), "kimi-k2.6");
+        assert_eq!(strip_opencode_prefix("kimi-k2.6"), "kimi-k2.6");
     }
 
     #[test]
     fn classifies_free_models_with_or_without_prefix() {
-        assert!(super::is_opencode_go_free_model("deepseek-v4-flash-free"));
-        assert!(super::is_opencode_go_free_model(
-            "opencode-go/nemotron-3-super-free"
+        assert!(super::is_opencode_free_model("deepseek-v4-flash-free"));
+        assert!(super::is_opencode_free_model(
+            "opencode/nemotron-3-super-free"
         ));
         // the paid twin of a free model is not free.
-        assert!(!super::is_opencode_go_free_model("deepseek-v4-flash"));
-        assert!(!super::is_opencode_go_free_model("opencode-go/glm-5.1"));
+        assert!(!super::is_opencode_free_model("deepseek-v4-flash"));
+        assert!(!super::is_opencode_free_model("opencode/glm-5.1"));
     }
 }

@@ -31,7 +31,7 @@ Authorize at least one account before serving traffic.
 ```bash
 pengepul login --provider anthropic
 pengepul login --provider codex
-pengepul login --provider opencode-go
+pengepul login --provider opencode
 ```
 
 anthropic and codex use OAuth; use manual mode when the browser callback cannot reach
@@ -42,20 +42,19 @@ pengepul login --provider anthropic --manual
 pengepul login --provider codex --manual
 ```
 
-opencode-go uses a static API key instead of OAuth. With opencode installed and signed in,
+opencode uses a static API key instead of OAuth. With opencode installed and signed in,
 pengepul imports the key from its `auth.json`; otherwise pass it explicitly:
 
 ```bash
-pengepul login --provider opencode-go --key sk-...
+pengepul login --provider opencode --key sk-...
 ```
 
 Prefer the import path: a key passed via `--key` is visible in process listings (`ps`) and
 shell history, whereas the import reads it directly from opencode's stored credentials.
 
-Route opencode-go models with the `opencode-go/` prefix on `/v1/chat/completions`, e.g.
-`opencode-go/glm-5.1` (paid) or `opencode-go/deepseek-v4-flash-free` (free); the shorthand
-`opencode/` prefix is also accepted. The available ids are listed by `GET /v1/models` once a
-key is loaded.
+Route opencode models with the `opencode/` prefix on `/v1/chat/completions`, e.g.
+`opencode/glm-5.1` (paid) or `opencode/deepseek-v4-flash-free` (free). The available ids are
+listed by `GET /v1/models` once a key is loaded.
 
 Tokens are stored under `~/.pengepul` by default.
 
@@ -103,8 +102,8 @@ pengepul serve
 pengepul serve --host 127.0.0.1 --port 8318
 pengepul login --provider anthropic
 pengepul login --provider codex
-pengepul login --provider opencode-go
-pengepul login --provider opencode-go --key sk-...
+pengepul login --provider opencode
+pengepul login --provider opencode --key sk-...
 pengepul login --provider anthropic --manual
 pengepul login --provider codex --manual
 pengepul help
@@ -260,15 +259,15 @@ curl -sS http://127.0.0.1:8317/v1/responses \
   }'
 ```
 
-opencode-go chat completion. Route the model with the `opencode-go/` prefix (or the
-`opencode/` shorthand); list the available ids with `GET /v1/models` once a key is loaded:
+opencode chat completion. Route the model with the `opencode/` prefix; list the available
+ids with `GET /v1/models` once a key is loaded:
 
 ```bash
 curl -sS http://127.0.0.1:8317/v1/chat/completions \
   -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "opencode-go/glm-5.1",
+    "model": "opencode/glm-5.1",
     "messages": [
       {
         "role": "user",
@@ -279,14 +278,14 @@ curl -sS http://127.0.0.1:8317/v1/chat/completions \
 ```
 
 The same route serves free models — swap in a `-free` id, e.g.
-`opencode-go/deepseek-v4-flash-free`:
+`opencode/deepseek-v4-flash-free`:
 
 ```bash
 curl -sS http://127.0.0.1:8317/v1/chat/completions \
   -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "opencode-go/deepseek-v4-flash-free",
+    "model": "opencode/deepseek-v4-flash-free",
     "messages": [
       {
         "role": "user",

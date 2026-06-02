@@ -82,7 +82,7 @@ pub fn load_all_tokens(auth_dir: &Path, provider: Option<ProviderId>) -> Result<
             }
         } else if !(filename.starts_with("claude-")
             || filename.starts_with("codex-")
-            || filename.starts_with("opencodego-"))
+            || filename.starts_with("opencode-"))
         {
             continue;
         }
@@ -109,7 +109,7 @@ fn token_to_storage(token: &TokenData) -> StoredToken {
         token_type: Some(match token.provider {
             ProviderId::Anthropic => "claude".to_string(),
             ProviderId::Codex => "codex".to_string(),
-            ProviderId::OpenCodeGo => "opencodego".to_string(),
+            ProviderId::Opencode => "opencode".to_string(),
         }),
         expired: token.expires_at.clone(),
         account_uuid: Some(token.account_uuid.clone()),
@@ -122,7 +122,7 @@ fn token_to_storage(token: &TokenData) -> StoredToken {
 fn storage_to_token(stored: StoredToken) -> TokenData {
     let provider = match stored.token_type.as_deref() {
         Some("codex") => ProviderId::Codex,
-        Some("opencodego") => ProviderId::OpenCodeGo,
+        Some("opencode") => ProviderId::Opencode,
         _ => ProviderId::Anthropic,
     };
     let plan_type = stored

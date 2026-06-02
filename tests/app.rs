@@ -97,18 +97,18 @@ impl UpstreamClient for RetryUpstream {
         unreachable!("codex stream not used in retry test")
     }
 
-    fn opencode_go_chat(
+    fn opencode_chat(
         &self,
         _request: UpstreamRequest,
     ) -> Pin<Box<dyn Future<Output = Result<UpstreamJsonResponse>> + Send>> {
-        unreachable!("opencode-go not used in retry test")
+        unreachable!("opencode not used in retry test")
     }
 
-    fn opencode_go_chat_stream(
+    fn opencode_chat_stream(
         &self,
         _request: UpstreamRequest,
     ) -> Pin<Box<dyn Future<Output = Result<UpstreamSseResponse>> + Send>> {
-        unreachable!("opencode-go stream not used in retry test")
+        unreachable!("opencode stream not used in retry test")
     }
 }
 
@@ -219,7 +219,7 @@ impl UpstreamClient for FakeUpstream {
         })
     }
 
-    fn opencode_go_chat(
+    fn opencode_chat(
         &self,
         request: UpstreamRequest,
     ) -> Pin<Box<dyn Future<Output = Result<UpstreamJsonResponse>> + Send>> {
@@ -248,7 +248,7 @@ impl UpstreamClient for FakeUpstream {
         })
     }
 
-    fn opencode_go_chat_stream(
+    fn opencode_chat_stream(
         &self,
         request: UpstreamRequest,
     ) -> Pin<Box<dyn Future<Output = Result<UpstreamSseResponse>> + Send>> {
@@ -407,14 +407,14 @@ async fn app_auth_and_no_account_responses() {
     assert_eq!(body["error"]["provider"], "codex");
 }
 
-fn opencode_go_token() -> TokenData {
+fn opencode_token() -> TokenData {
     TokenData {
-        access_token: "sk-opencode-go".to_string(),
+        access_token: "sk-opencode".to_string(),
         refresh_token: String::new(),
-        email: "opencode-go-acct".to_string(),
+        email: "opencode-acct".to_string(),
         expires_at: "9999-12-31T23:59:59Z".to_string(),
         account_uuid: String::new(),
-        provider: ProviderId::OpenCodeGo,
+        provider: ProviderId::Opencode,
         id_token: None,
         last_refresh_at: None,
         plan_type: None,
@@ -422,9 +422,9 @@ fn opencode_go_token() -> TokenData {
 }
 
 #[tokio::test]
-async fn app_opencode_go_chat_passes_through_with_stripped_model() {
+async fn app_opencode_chat_passes_through_with_stripped_model() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    save_token(tmp.path(), &opencode_go_token()).expect("save token");
+    save_token(tmp.path(), &opencode_token()).expect("save token");
     let upstream = Arc::new(FakeUpstream::default());
     let app = create_app_with_upstream(config(tmp.path().to_path_buf()), upstream.clone());
 
@@ -438,7 +438,7 @@ async fn app_opencode_go_chat_passes_through_with_stripped_model() {
             .header("content-length", "256")
             .body(Body::from(
                 json!({
-                    "model": "opencode-go/glm-5.1",
+                    "model": "opencode/glm-5.1",
                     "messages": [{"role": "user", "content": "hi"}]
                 })
                 .to_string(),
@@ -456,9 +456,9 @@ async fn app_opencode_go_chat_passes_through_with_stripped_model() {
 }
 
 #[tokio::test]
-async fn app_opencode_go_chat_streams_through() {
+async fn app_opencode_chat_streams_through() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    save_token(tmp.path(), &opencode_go_token()).expect("save token");
+    save_token(tmp.path(), &opencode_token()).expect("save token");
     let upstream = Arc::new(FakeUpstream::default());
     let app = create_app_with_upstream(config(tmp.path().to_path_buf()), upstream.clone());
 
@@ -472,7 +472,7 @@ async fn app_opencode_go_chat_streams_through() {
             .header("content-length", "256")
             .body(Body::from(
                 json!({
-                    "model": "opencode-go/glm-5.1",
+                    "model": "opencode/glm-5.1",
                     "stream": true,
                     "messages": [{"role": "user", "content": "hi"}]
                 })
@@ -499,9 +499,9 @@ async fn app_opencode_go_chat_streams_through() {
 }
 
 #[tokio::test]
-async fn app_opencode_go_rejects_non_chat_routes() {
+async fn app_opencode_rejects_non_chat_routes() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    save_token(tmp.path(), &opencode_go_token()).expect("save token");
+    save_token(tmp.path(), &opencode_token()).expect("save token");
     let upstream = Arc::new(FakeUpstream::default());
     let app = create_app_with_upstream(config(tmp.path().to_path_buf()), upstream.clone());
 
@@ -515,7 +515,7 @@ async fn app_opencode_go_rejects_non_chat_routes() {
             .header("content-length", "256")
             .body(Body::from(
                 json!({
-                    "model": "opencode-go/glm-5.1",
+                    "model": "opencode/glm-5.1",
                     "messages": [{"role": "user", "content": "hi"}]
                 })
                 .to_string(),
@@ -525,14 +525,14 @@ async fn app_opencode_go_rejects_non_chat_routes() {
     .await;
 
     assert_eq!(status, 501);
-    assert_eq!(body["error"]["provider"], "opencode-go");
+    assert_eq!(body["error"]["provider"], "opencode");
     assert!(upstream.calls().is_empty());
 }
 
 #[tokio::test]
-async fn app_opencode_go_serves_even_with_unparseable_expiry() {
+async fn app_opencode_serves_even_with_unparseable_expiry() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let mut token = opencode_go_token();
+    let mut token = opencode_token();
     token.expires_at = "not-a-real-timestamp".to_string();
     save_token(tmp.path(), &token).expect("save token");
     let upstream = Arc::new(FakeUpstream::default());
@@ -548,7 +548,7 @@ async fn app_opencode_go_serves_even_with_unparseable_expiry() {
             .header("content-length", "256")
             .body(Body::from(
                 json!({
-                    "model": "opencode-go/glm-5.1",
+                    "model": "opencode/glm-5.1",
                     "messages": [{"role": "user", "content": "hi"}]
                 })
                 .to_string(),
@@ -557,16 +557,16 @@ async fn app_opencode_go_serves_even_with_unparseable_expiry() {
     )
     .await;
 
-    // opencode-go keys never refresh, so a non-RFC3339 stored expiry must not wedge the
+    // opencode keys never refresh, so a non-RFC3339 stored expiry must not wedge the
     // account into a refresh-failure cooldown.
     assert_eq!(status, 200, "expected 200, got {status}: {body}");
     assert_eq!(body["choices"][0]["message"]["content"], "pong");
 }
 
 #[tokio::test]
-async fn app_models_lists_opencode_go_when_key_present() {
+async fn app_models_lists_opencode_when_key_present() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    save_token(tmp.path(), &opencode_go_token()).expect("save token");
+    save_token(tmp.path(), &opencode_token()).expect("save token");
     let app = create_app(config(tmp.path().to_path_buf()));
 
     let (status, body) = json_response(
@@ -586,11 +586,11 @@ async fn app_models_lists_opencode_go_when_key_present() {
         .iter()
         .filter_map(|model| model["id"].as_str())
         .collect::<Vec<_>>();
-    assert!(ids.contains(&"opencode-go/glm-5.1"));
+    assert!(ids.contains(&"opencode/glm-5.1"));
 }
 
 #[tokio::test]
-async fn app_models_omits_opencode_go_without_key() {
+async fn app_models_omits_opencode_without_key() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let app = create_app(config(tmp.path().to_path_buf()));
 
@@ -605,23 +605,23 @@ async fn app_models_omits_opencode_go_without_key() {
     .await;
 
     assert_eq!(status, 200);
-    let lists_opencode_go = body["data"]
+    let lists_opencode = body["data"]
         .as_array()
         .expect("data array")
         .iter()
         .any(|model| {
             model["id"]
                 .as_str()
-                .is_some_and(|id| id.starts_with("opencode-go/"))
+                .is_some_and(|id| id.starts_with("opencode/"))
         });
     assert!(
-        !lists_opencode_go,
-        "must not list opencode-go models without a loaded key"
+        !lists_opencode,
+        "must not list opencode models without a loaded key"
     );
 }
 
 #[tokio::test]
-async fn app_opencode_go_count_tokens_is_unsupported() {
+async fn app_opencode_count_tokens_is_unsupported() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let app = create_app(config(tmp.path().to_path_buf()));
 
@@ -635,7 +635,7 @@ async fn app_opencode_go_count_tokens_is_unsupported() {
             .header("content-length", "256")
             .body(Body::from(
                 json!({
-                    "model": "opencode-go/glm-5.1",
+                    "model": "opencode/glm-5.1",
                     "messages": [{"role": "user", "content": "hi"}]
                 })
                 .to_string(),
@@ -645,13 +645,13 @@ async fn app_opencode_go_count_tokens_is_unsupported() {
     .await;
 
     assert_eq!(status, 501);
-    assert_eq!(body["error"]["provider"], "opencode-go");
+    assert_eq!(body["error"]["provider"], "opencode");
 }
 
 #[tokio::test]
-async fn app_opencode_go_stream_records_usage_to_account_stats() {
+async fn app_opencode_stream_records_usage_to_account_stats() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    save_token(tmp.path(), &opencode_go_token()).expect("save token");
+    save_token(tmp.path(), &opencode_token()).expect("save token");
     let upstream = Arc::new(FakeUpstream::default());
     let app = create_app_with_upstream(config(tmp.path().to_path_buf()), upstream);
 
@@ -665,7 +665,7 @@ async fn app_opencode_go_stream_records_usage_to_account_stats() {
             .header("content-length", "256")
             .body(Body::from(
                 json!({
-                    "model": "opencode-go/glm-5.1",
+                    "model": "opencode/glm-5.1",
                     "stream": true,
                     "messages": [{"role": "user", "content": "hi"}]
                 })
@@ -686,7 +686,7 @@ async fn app_opencode_go_stream_records_usage_to_account_stats() {
     )
     .await;
     assert_eq!(status, 200);
-    let account = &accounts["providers"]["opencode-go"]["accounts"][0];
+    let account = &accounts["providers"]["opencode"]["accounts"][0];
     assert_eq!(account["totalSuccesses"], 1);
     assert_eq!(account["totalInputTokens"], 1);
     assert_eq!(account["totalOutputTokens"], 1);

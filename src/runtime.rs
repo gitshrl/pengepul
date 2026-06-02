@@ -131,8 +131,8 @@ impl CliRuntime for RealRuntime {
         manual: bool,
         key: Option<&str>,
     ) -> Result<String> {
-        if provider == ProviderId::OpenCodeGo {
-            return save_opencode_go_login(config, key);
+        if provider == ProviderId::Opencode {
+            return save_opencode_login(config, key);
         }
         let state = random_urlsafe(32);
         let pkce = generate_pkce_codes();
@@ -155,8 +155,8 @@ impl CliRuntime for RealRuntime {
                 ProviderId::Codex => {
                     exchange_codex_code(&callback.code, &callback.state, &state, &pkce).await
                 }
-                ProviderId::OpenCodeGo => {
-                    unreachable!("opencode-go login is handled before the OAuth flow")
+                ProviderId::Opencode => {
+                    unreachable!("opencode login is handled before the OAuth flow")
                 }
             }
         })?;
@@ -238,7 +238,7 @@ fn auth_url(provider: ProviderId, state: &str, pkce: &PkceCodes) -> String {
     match provider {
         ProviderId::Anthropic => generate_anthropic_auth_url(state, pkce),
         ProviderId::Codex => generate_codex_auth_url(state, pkce),
-        ProviderId::OpenCodeGo => unreachable!("opencode-go has no OAuth authorize URL"),
+        ProviderId::Opencode => unreachable!("opencode has no OAuth authorize URL"),
     }
 }
 
@@ -250,29 +250,29 @@ fn callback_endpoint(provider: ProviderId) -> Result<(u16, &'static str)> {
             Ok((port, "/callback"))
         }
         ProviderId::Codex => Ok((CODEX_CALLBACK_PORT, CODEX_CALLBACK_PATH)),
-        ProviderId::OpenCodeGo => bail!("opencode-go has no OAuth callback"),
+        ProviderId::Opencode => bail!("opencode has no OAuth callback"),
     }
 }
 
-/// Resolve the opencode-go API key and persist it as a degenerate, refresh-less token.
+/// Resolve the opencode API key and persist it as a degenerate, refresh-less token.
 ///
 /// The key comes from `--key` when provided, otherwise it is imported from opencode's own
 /// `auth.json`. The stored token has an empty refresh token and a far-future expiry so the
 /// account manager's refresh policy never fires.
-fn save_opencode_go_login(config: &Config, key: Option<&str>) -> Result<String> {
+fn save_opencode_login(config: &Config, key: Option<&str>) -> Result<String> {
     let key = match key {
         Some(key) if !key.trim().is_empty() => key.trim().to_string(),
-        _ => import_opencode_go_key()
-            .context("no opencode-go key: pass --key or run `opencode auth login` first")?,
+        _ => import_opencode_key()
+            .context("no opencode key: pass --key or run `opencode auth login` first")?,
     };
-    let email = format!("opencode-go-{}", &sha256_hex(&key)[..8]);
+    let email = format!("opencode-{}", &sha256_hex(&key)[..8]);
     let token = TokenData {
         access_token: key,
         refresh_token: String::new(),
         email: email.clone(),
         expires_at: "9999-12-31T23:59:59Z".to_string(),
         account_uuid: String::new(),
-        provider: ProviderId::OpenCodeGo,
+        provider: ProviderId::Opencode,
         id_token: None,
         last_refresh_at: None,
         plan_type: None,
@@ -281,14 +281,14 @@ fn save_opencode_go_login(config: &Config, key: Option<&str>) -> Result<String> 
     Ok(email)
 }
 
-fn import_opencode_go_key() -> Result<String> {
+fn import_opencode_key() -> Result<String> {
     let xdg_data_home = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from);
     let home = std::env::var_os("HOME").map(PathBuf::from);
-    import_opencode_go_key_from(&opencode_auth_json_paths(xdg_data_home, home))
+    import_opencode_key_from(&opencode_auth_json_paths(xdg_data_home, home))
 }
 
-/// Read the first opencode-go key found across `paths`, skipping unreadable/garbage files.
-fn import_opencode_go_key_from(paths: &[PathBuf]) -> Result<String> {
+/// Read the first opencode key found across `paths`, skipping unreadable/garbage files.
+fn import_opencode_key_from(paths: &[PathBuf]) -> Result<String> {
     for path in paths {
         let Ok(text) = std::fs::read_to_string(path) else {
             continue;
@@ -296,11 +296,11 @@ fn import_opencode_go_key_from(paths: &[PathBuf]) -> Result<String> {
         let Ok(value) = serde_json::from_str::<Value>(&text) else {
             continue;
         };
-        if let Some(key) = opencode_go_key_from_auth_json(&value) {
+        if let Some(key) = opencode_key_from_auth_json(&value) {
             return Ok(key);
         }
     }
-    bail!("opencode-go key not found in opencode auth.json")
+    bail!("opencode key not found in opencode auth.json")
 }
 
 /// opencode stores credentials under `$XDG_DATA_HOME/opencode` (preferred) then
@@ -317,7 +317,9 @@ fn opencode_auth_json_paths(xdg_data_home: Option<PathBuf>, home: Option<PathBuf
 }
 
 #[must_use]
-fn opencode_go_key_from_auth_json(value: &Value) -> Option<String> {
+fn opencode_key_from_auth_json(value: &Value) -> Option<String> {
+    // opencode itself stores its credentials under the literal key "opencode-go" — keep this
+    // string as-is even though our provider is named "opencode".
     let entry = value.get("opencode-go")?;
     if entry.get("type").and_then(Value::as_str) != Some("api") {
         return None;
@@ -693,33 +695,29 @@ fn command_output(command: &[&str]) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        import_opencode_go_key_from, opencode_auth_json_paths, opencode_go_key_from_auth_json,
-    };
+    use super::{import_opencode_key_from, opencode_auth_json_paths, opencode_key_from_auth_json};
     use serde_json::json;
     use std::path::PathBuf;
 
     #[test]
-    fn reads_opencode_go_api_key() {
+    fn reads_opencode_api_key() {
+        // opencode's auth.json uses the literal key "opencode-go" — that's an external contract.
         let auth = json!({
             "zai-coding-plan": {"type": "api", "key": "zai"},
             "opencode-go": {"type": "api", "key": "sk-go"}
         });
-        assert_eq!(
-            opencode_go_key_from_auth_json(&auth).as_deref(),
-            Some("sk-go")
-        );
+        assert_eq!(opencode_key_from_auth_json(&auth).as_deref(), Some("sk-go"));
     }
 
     #[test]
     fn ignores_missing_non_api_or_empty_entries() {
-        assert_eq!(opencode_go_key_from_auth_json(&json!({})), None);
+        assert_eq!(opencode_key_from_auth_json(&json!({})), None);
         assert_eq!(
-            opencode_go_key_from_auth_json(&json!({"opencode-go": {"type": "oauth", "key": "x"}})),
+            opencode_key_from_auth_json(&json!({"opencode-go": {"type": "oauth", "key": "x"}})),
             None
         );
         assert_eq!(
-            opencode_go_key_from_auth_json(&json!({"opencode-go": {"type": "api", "key": ""}})),
+            opencode_key_from_auth_json(&json!({"opencode-go": {"type": "api", "key": ""}})),
             None
         );
     }
@@ -753,9 +751,9 @@ mod tests {
         )
         .expect("write valid");
 
-        let key = import_opencode_go_key_from(&[missing, garbage, valid]).expect("key");
+        let key = import_opencode_key_from(&[missing, garbage, valid]).expect("key");
         assert_eq!(key, "sk-go");
 
-        assert!(import_opencode_go_key_from(&[]).is_err());
+        assert!(import_opencode_key_from(&[]).is_err());
     }
 }

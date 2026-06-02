@@ -142,11 +142,11 @@ enum Command {
     Login {
         #[arg(long = "config")]
         command_config: Option<PathBuf>,
-        #[arg(long, default_value = "anthropic", value_parser = ["anthropic", "codex", "opencode-go"])]
+        #[arg(long, default_value = "anthropic", value_parser = ["anthropic", "codex", "opencode"])]
         provider: String,
         #[arg(long)]
         manual: bool,
-        /// opencode-go API key (defaults to importing it from opencode's auth.json)
+        /// opencode API key (defaults to importing it from opencode's auth.json)
         #[arg(long)]
         key: Option<String>,
     },
@@ -473,8 +473,8 @@ fn login(
 ) -> Result<()> {
     let config = load_config(config_path, Some(home), cwd)?;
     let provider = provider.parse::<ProviderId>().map_err(anyhow::Error::msg)?;
-    if provider == ProviderId::OpenCodeGo && manual {
-        bail!("--manual is not supported for opencode-go (it uses a static API key, not OAuth)");
+    if provider == ProviderId::Opencode && manual {
+        bail!("--manual is not supported for opencode (it uses a static API key, not OAuth)");
     }
     let email = runtime.login(&config, provider, manual, key)?;
     output.line(&format!("saved {provider} account token for {email}"));

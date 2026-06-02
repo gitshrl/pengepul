@@ -5,7 +5,7 @@ use pengepul::config::{CloakingConfig, Config, DebugMode, TimeoutConfig};
 use pengepul::types::{AvailableAccount, ProviderId, TokenData};
 use pengepul::upstream::{
     anthropic_headers, apply_cloaking, build_beta_header, codex_headers,
-    normalize_codex_responses_body, opencode_go_headers,
+    normalize_codex_responses_body, opencode_headers,
 };
 use serde_json::{Value, json};
 
@@ -144,13 +144,13 @@ fn normalize_codex_responses_body_defaults_and_string_input() {
 }
 
 #[test]
-fn opencode_go_headers_use_bearer_auth() {
-    let headers = opencode_go_headers("sk-go", false);
+fn opencode_headers_use_bearer_auth() {
+    let headers = opencode_headers("sk-go", false);
     assert_eq!(headers["Authorization"], "Bearer sk-go");
     assert_eq!(headers["Content-Type"], "application/json");
     assert_eq!(headers["Accept"], "application/json");
 
-    let stream_headers = opencode_go_headers("sk-go", true);
+    let stream_headers = opencode_headers("sk-go", true);
     assert_eq!(stream_headers["Accept"], "text/event-stream");
 }
 

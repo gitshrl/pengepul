@@ -141,18 +141,18 @@ fn token_storage_round_trips_provider_files() {
     save_token(
         tmp.path(),
         &TokenData {
-            access_token: "opencode-go-key".to_string(),
+            access_token: "opencode-key".to_string(),
             refresh_token: String::new(),
-            email: "opencode-go-acct".to_string(),
+            email: "opencode-acct".to_string(),
             expires_at: "9999-12-31T23:59:59Z".to_string(),
             account_uuid: String::new(),
-            provider: "opencode-go".parse().unwrap(),
+            provider: "opencode".parse().unwrap(),
             id_token: None,
             last_refresh_at: None,
             plan_type: None,
         },
     )
-    .expect("save opencode-go");
+    .expect("save opencode");
 
     let mut files = fs::read_dir(tmp.path())
         .expect("read dir")
@@ -170,7 +170,7 @@ fn token_storage_round_trips_provider_files() {
         [
             "claude-alice@example.com.json",
             "codex-bob@example.com.json",
-            "opencodego-opencode-go-acct.json"
+            "opencode-opencode-acct.json"
         ]
     );
     assert_eq!(
@@ -190,17 +190,17 @@ fn token_storage_round_trips_provider_files() {
         ["bob@example.com"]
     );
     assert_eq!(
-        load_all_tokens(tmp.path(), Some("opencode-go".parse().unwrap()))
-            .expect("load opencode-go")
+        load_all_tokens(tmp.path(), Some("opencode".parse().unwrap()))
+            .expect("load opencode")
             .into_iter()
             .map(|token| token.email)
             .collect::<Vec<_>>(),
-        ["opencode-go-acct"]
+        ["opencode-acct"]
     );
 }
 
 #[test]
-fn registry_routes_anthropic_codex_and_opencode_go() {
+fn registry_routes_anthropic_codex_and_opencode() {
     let tmp = tempdir().expect("tempdir");
     let registry = build_registry(tmp.path());
 
@@ -213,7 +213,7 @@ fn registry_routes_anthropic_codex_and_opencode_go() {
         [
             "anthropic".parse().unwrap(),
             "codex".parse().unwrap(),
-            "opencode-go".parse().unwrap()
+            "opencode".parse().unwrap()
         ]
     );
     assert_eq!(
@@ -243,10 +243,10 @@ fn registry_routes_anthropic_codex_and_opencode_go() {
         "anthropic".parse().unwrap()
     );
     assert_eq!(
-        registry.for_model("opencode-go/glm-5.1").id,
-        "opencode-go".parse().unwrap()
+        registry.for_model("opencode/glm-5.1").id,
+        "opencode".parse().unwrap()
     );
-    // a bare opencode-go model id (no routing prefix) must not hijack the default.
+    // a bare opencode model id (no routing prefix) must not hijack the default.
     assert_eq!(
         registry.for_model("glm-5.1").id,
         "anthropic".parse().unwrap()

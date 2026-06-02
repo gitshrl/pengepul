@@ -369,38 +369,38 @@ fn service_logs_defaults_to_recent_lines_without_follow() {
 }
 
 #[test]
-fn login_opencode_go_passes_key() {
+fn login_opencode_passes_key() {
     let tmp = tempdir().expect("tempdir");
     write_config(tmp.path(), "127.0.0.1", 8317);
     let mut runtime = FakeRuntime::default();
 
     let outcome = run(
-        &["login", "--provider", "opencode-go", "--key", "sk-go"],
+        &["login", "--provider", "opencode", "--key", "sk-go"],
         tmp.path(),
         &mut runtime,
     );
 
-    assert_eq!(runtime.login_provider, Some(ProviderId::OpenCodeGo));
+    assert_eq!(runtime.login_provider, Some(ProviderId::Opencode));
     assert_eq!(runtime.login_key.as_deref(), Some("sk-go"));
     assert_eq!(
         outcome.stdout.trim(),
-        "saved opencode-go account token for opencode-go@example.com"
+        "saved opencode account token for opencode@example.com"
     );
 }
 
 #[test]
-fn login_opencode_go_rejects_manual() {
+fn login_opencode_rejects_manual() {
     let tmp = tempdir().expect("tempdir");
     write_config(tmp.path(), "127.0.0.1", 8317);
     let mut runtime = FakeRuntime::default();
 
     let error = run_with_env(
-        &["login", "--provider", "opencode-go", "--manual"],
+        &["login", "--provider", "opencode", "--manual"],
         tmp.path(),
         tmp.path(),
         &mut runtime,
     )
-    .expect_err("--manual with opencode-go should error");
+    .expect_err("--manual with opencode should error");
 
     assert!(
         error.to_string().contains("manual"),

@@ -25,7 +25,7 @@ const REAUTH_COOLDOWN_SECONDS: f64 = 24.0 * 60.0 * 60.0;
 pub enum RefreshPolicyKind {
     ExpiresLead,
     SinceLastRefresh,
-    /// Never refresh — for static credentials (e.g. opencode-go API keys) that cannot expire.
+    /// Never refresh — for static credentials (e.g. opencode API keys) that cannot expire.
     Never,
 }
 

@@ -119,29 +119,29 @@ async fn exhausted_refresh_token_marks_account_for_reauth() {
 async fn failure_cooldown_doubles_from_one_second() {
     let tmp = tempdir().expect("tempdir");
     fs::write(
-        tmp.path().join("opencodego-key.json"),
+        tmp.path().join("opencode-key.json"),
         json!({
-            "access_token": "sk-opencode-go",
+            "access_token": "sk-opencode",
             "refresh_token": "",
-            "email": "opencode-go-abc12345",
-            "type": "opencodego",
+            "email": "opencode-abc12345",
+            "type": "opencode",
             "expired": "9999-12-31T23:59:59Z",
             "account_uuid": ""
         })
         .to_string(),
     )
-    .expect("write opencode-go token");
+    .expect("write opencode token");
     let mut manager = AccountManager::new(
         tmp.path().to_path_buf(),
-        "opencode-go".parse().unwrap(),
-        |_refresh_token| Box::pin(async { anyhow::bail!("opencode-go never refreshes") }),
+        "opencode".parse().unwrap(),
+        |_refresh_token| Box::pin(async { anyhow::bail!("opencode never refreshes") }),
         RefreshPolicy::default(),
     );
     manager.load().expect("load accounts");
 
     // regardless of failure kind, consecutive failures back off 1s, 2s, 4s, …
     for expected in [1.0, 2.0, 4.0] {
-        manager.record_failure("opencode-go-abc12345", "auth", Some("Insufficient balance"));
+        manager.record_failure("opencode-abc12345", "auth", Some("Insufficient balance"));
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("clock")
