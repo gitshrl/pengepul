@@ -88,10 +88,26 @@ pub const OPENCODE_GO_MODELS: [&str; 15] = [
     "mimo-v2-omni",
 ];
 
+/// Free-tier model ids served by opencode zen, reported on `/v1/models`. Unlike the paid
+/// go-plan models these route to the credits endpoint (`/zen/v1`) rather than `/zen/go/v1`.
+pub const OPENCODE_GO_FREE_MODELS: [&str; 5] = [
+    "deepseek-v4-flash-free",
+    "mimo-v2.5-free",
+    "qwen3.6-plus-free",
+    "minimax-m3-free",
+    "nemotron-3-super-free",
+];
+
 /// Strip the `opencode-go/` routing prefix to get the upstream model id.
 #[must_use]
 pub fn strip_opencode_go_prefix(model: &str) -> &str {
     model.strip_prefix(OPENCODE_GO_PREFIX).unwrap_or(model)
+}
+
+/// True when `model` (with or without the `opencode-go/` prefix) is a free-tier zen model.
+#[must_use]
+pub fn is_opencode_go_free_model(model: &str) -> bool {
+    OPENCODE_GO_FREE_MODELS.contains(&strip_opencode_go_prefix(model))
 }
 
 fn opencode_go_matches_model(model: &str) -> bool {
@@ -159,5 +175,16 @@ mod tests {
             "kimi-k2.6"
         );
         assert_eq!(strip_opencode_go_prefix("kimi-k2.6"), "kimi-k2.6");
+    }
+
+    #[test]
+    fn classifies_free_models_with_or_without_prefix() {
+        assert!(super::is_opencode_go_free_model("deepseek-v4-flash-free"));
+        assert!(super::is_opencode_go_free_model(
+            "opencode-go/nemotron-3-super-free"
+        ));
+        // the paid twin of a free model is not free.
+        assert!(!super::is_opencode_go_free_model("deepseek-v4-flash"));
+        assert!(!super::is_opencode_go_free_model("opencode-go/glm-5.1"));
     }
 }

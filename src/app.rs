@@ -21,7 +21,8 @@ use crate::accounts::{AccountManager, RefreshFuture, RefreshPolicy, RefreshPolic
 use crate::config::Config;
 use crate::oauth::{refresh_anthropic_tokens, refresh_codex_tokens};
 use crate::providers::{
-    OPENCODE_GO_MODELS, ProviderRegistry, build_registry, strip_opencode_go_prefix,
+    OPENCODE_GO_FREE_MODELS, OPENCODE_GO_MODELS, ProviderRegistry, build_registry,
+    strip_opencode_go_prefix,
 };
 use crate::streaming::{
     AnthropicStreamState, ChatStreamState, ResponsesStreamState, anthropic_sse_to_chat,
@@ -35,9 +36,8 @@ use crate::translate::{
 };
 use crate::types::{AvailableAccount, ProviderId, UsageData};
 use crate::upstream::{
-    ANTHROPIC_BASE_URL, CODEX_BASE_URL, CODEX_RESPONSES_PATH, OPENCODE_GO_BASE_URL,
-    anthropic_headers, apply_cloaking, codex_headers, normalize_codex_responses_body,
-    opencode_go_headers,
+    ANTHROPIC_BASE_URL, CODEX_BASE_URL, CODEX_RESPONSES_PATH, anthropic_headers, apply_cloaking,
+    codex_headers, normalize_codex_responses_body, opencode_go_base_url, opencode_go_headers,
 };
 use crate::utils::now_iso;
 
@@ -316,9 +316,10 @@ impl UpstreamClient for HttpUpstreamClient {
     fn opencode_go_chat(&self, request: UpstreamRequest) -> UpstreamFuture {
         let client = self.client.clone();
         Box::pin(async move {
+            let base = opencode_go_base_url(body_model(&request.body));
             send_json(
                 client,
-                format!("{OPENCODE_GO_BASE_URL}/chat/completions"),
+                format!("{base}/chat/completions"),
                 opencode_go_headers(&request.account.token.access_token, false),
                 request.body,
                 request.config.timeouts.messages_ms,
@@ -330,9 +331,10 @@ impl UpstreamClient for HttpUpstreamClient {
     fn opencode_go_chat_stream(&self, request: UpstreamRequest) -> UpstreamSseFuture {
         let client = self.client.clone();
         Box::pin(async move {
+            let base = opencode_go_base_url(body_model(&request.body));
             send_stream(
                 client,
-                format!("{OPENCODE_GO_BASE_URL}/chat/completions"),
+                format!("{base}/chat/completions"),
                 opencode_go_headers(&request.account.token.access_token, true),
                 request.body,
                 request.config.timeouts.stream_messages_ms,
@@ -536,7 +538,10 @@ async fn models(State(state): State<AppState>, headers: HeaderMap) -> Response {
     })
     .collect::<Vec<_>>();
     if has_opencode_go {
-        models.extend(OPENCODE_GO_MODELS.iter().map(|id| {
+        let ids = OPENCODE_GO_MODELS
+            .iter()
+            .chain(OPENCODE_GO_FREE_MODELS.iter());
+        models.extend(ids.map(|id| {
             json!({
                 "id": format!("opencode-go/{id}"),
                 "object": "model",
@@ -1609,6 +1614,12 @@ fn codex_request_body(body: &Value, model: &str, route: RequestRoute) -> Value {
 
 /// Build the opencode-go chat/completions body: passthrough with the routing prefix stripped
 /// from `model`. On streaming, inject `stream_options.include_usage` so usage reaches accounting.
+fn body_model(body: &Value) -> &str {
+    body.get("model")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+}
+
 fn opencode_go_request_body(body: &Value, model: &str, stream: bool) -> Value {
     let bare_model = strip_opencode_go_prefix(model);
     let mut next_body = body.clone();

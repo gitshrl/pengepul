@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::config::Config;
+use crate::providers::is_opencode_go_free_model;
 use crate::types::AvailableAccount;
 use crate::utils::sha256_hex;
 
@@ -18,6 +19,7 @@ pub const CODEX_MODELS_PATH: &str = "/codex/models";
 pub const CODEX_DEFAULT_ORIGINATOR: &str = "codex_cli_rs";
 pub const CODEX_DEFAULT_CLI_VERSION: &str = "0.125.0";
 pub const OPENCODE_GO_BASE_URL: &str = "https://opencode.ai/zen/go/v1";
+pub const OPENCODE_ZEN_BASE_URL: &str = "https://opencode.ai/zen/v1";
 
 const FINGERPRINT_SALT: &str = "59cf53e54c78";
 
@@ -292,6 +294,17 @@ pub fn codex_headers(
     headers
 }
 
+/// Base url for an opencode-go `model`: free-tier models live on the credits endpoint
+/// (`/zen/v1`); paid go-plan models live on `/zen/go/v1`.
+#[must_use]
+pub fn opencode_go_base_url(model: &str) -> &'static str {
+    if is_opencode_go_free_model(model) {
+        OPENCODE_ZEN_BASE_URL
+    } else {
+        OPENCODE_GO_BASE_URL
+    }
+}
+
 /// Build headers for an opencode-go chat/completions request.
 ///
 /// opencode-go is a static-key, OpenAI-compatible gateway: bearer auth, no cloaking.
@@ -457,5 +470,29 @@ fn codex_arch() -> &'static str {
     match std::env::consts::ARCH {
         "aarch64" => "arm64",
         _ => "x86_64",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{OPENCODE_GO_BASE_URL, OPENCODE_ZEN_BASE_URL, opencode_go_base_url};
+
+    #[test]
+    fn free_models_route_to_zen_endpoint() {
+        assert_eq!(
+            opencode_go_base_url("deepseek-v4-flash-free"),
+            OPENCODE_ZEN_BASE_URL
+        );
+        // classification is robust to the routing prefix surviving into the body.
+        assert_eq!(
+            opencode_go_base_url("opencode-go/minimax-m3-free"),
+            OPENCODE_ZEN_BASE_URL
+        );
+        // paid go-plan models keep the go endpoint; the bare paid twin is not "free".
+        assert_eq!(
+            opencode_go_base_url("deepseek-v4-flash"),
+            OPENCODE_GO_BASE_URL
+        );
+        assert_eq!(opencode_go_base_url("glm-5.1"), OPENCODE_GO_BASE_URL);
     }
 }
