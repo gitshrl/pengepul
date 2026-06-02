@@ -269,7 +269,6 @@ curl -sS http://127.0.0.1:8317/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "opencode-go/glm-5.1",
-    "max_tokens": 32,
     "messages": [
       {
         "role": "user",
@@ -297,14 +296,15 @@ curl -sS http://127.0.0.1:8317/v1/chat/completions \
   }'
 ```
 
-Some free models (e.g. `deepseek-v4-flash-free`) are reasoning models that spend tokens on
-hidden reasoning first. Leave `max_tokens` unset or generous — too small a cap is consumed by
-reasoning and `content` comes back empty with `finish_reason: length`.
+Many opencode models (e.g. `glm-5.1`, `deepseek-v4-flash-free`) are reasoning models that
+spend tokens on hidden reasoning first. Leave `max_tokens` unset or generous — too small a cap
+is consumed by reasoning and `content` comes back empty with `finish_reason: length`.
 
 ## Behavior
 
 - Account selection is round-robin with short sticky windows.
-- Failed accounts enter provider-specific cooldowns: OAuth providers back off progressively (up to ~1h on auth failures), while opencode-go's single static key uses a flat 5s so one transient error can't lock out every opencode model.
+- A failed account backs off 1s, 2s, 4s, 8s, … per consecutive failure (capped at 5 minutes) and resets on its next success, so a transient error can't lock an account out for long.
+- A dead OAuth refresh token (re-login required) is a separate, longer lockout.
 - Tokens refresh before expiry or on the configured Codex refresh cadence.
 - Streaming responses are translated between Anthropic SSE, OpenAI chat chunks, and Responses API events.
 - Request body size is bounded by `body-limit`.

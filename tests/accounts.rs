@@ -116,7 +116,7 @@ async fn exhausted_refresh_token_marks_account_for_reauth() {
 }
 
 #[tokio::test]
-async fn opencode_go_auth_failure_uses_short_flat_cooldown() {
+async fn failure_cooldown_doubles_from_one_second() {
     let tmp = tempdir().expect("tempdir");
     fs::write(
         tmp.path().join("opencodego-key.json"),
@@ -139,20 +139,19 @@ async fn opencode_go_auth_failure_uses_short_flat_cooldown() {
     );
     manager.load().expect("load accounts");
 
-    // an upstream 401 cools a rotating OAuth provider for ~10 minutes; opencode-go is a single
-    // static key with nothing to rotate to, so even repeated auth failures stay capped at 5s.
-    manager.record_failure("opencode-go-abc12345", "auth", Some("Insufficient balance"));
-    manager.record_failure("opencode-go-abc12345", "auth", Some("Insufficient balance"));
-
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("clock")
-        .as_secs_f64();
-    let snapshot = manager.snapshots().remove(0);
-    assert_eq!(snapshot["available"], false);
-    let remaining = snapshot["cooldownUntil"].as_f64().expect("cooldownUntil") - now;
-    assert!(
-        remaining > 0.0 && remaining <= 5.0,
-        "expected a flat <=5s cooldown, got {remaining}s"
-    );
+    // regardless of failure kind, consecutive failures back off 1s, 2s, 4s, …
+    for expected in [1.0, 2.0, 4.0] {
+        manager.record_failure("opencode-go-abc12345", "auth", Some("Insufficient balance"));
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_secs_f64();
+        let snapshot = manager.snapshots().remove(0);
+        assert_eq!(snapshot["available"], false);
+        let remaining = snapshot["cooldownUntil"].as_f64().expect("cooldownUntil") - now;
+        assert!(
+            (expected - 0.5..=expected).contains(&remaining),
+            "failure expected ~{expected}s cooldown, got {remaining}s"
+        );
+    }
 }
