@@ -114,3 +114,45 @@ async fn exhausted_refresh_token_marks_account_for_reauth() {
         "refresh token invalid_grant; re-run login for codex"
     );
 }
+
+#[tokio::test]
+async fn opencode_go_auth_failure_uses_short_flat_cooldown() {
+    let tmp = tempdir().expect("tempdir");
+    fs::write(
+        tmp.path().join("opencodego-key.json"),
+        json!({
+            "access_token": "sk-opencode-go",
+            "refresh_token": "",
+            "email": "opencode-go-abc12345",
+            "type": "opencodego",
+            "expired": "9999-12-31T23:59:59Z",
+            "account_uuid": ""
+        })
+        .to_string(),
+    )
+    .expect("write opencode-go token");
+    let mut manager = AccountManager::new(
+        tmp.path().to_path_buf(),
+        "opencode-go".parse().unwrap(),
+        |_refresh_token| Box::pin(async { anyhow::bail!("opencode-go never refreshes") }),
+        RefreshPolicy::default(),
+    );
+    manager.load().expect("load accounts");
+
+    // an upstream 401 cools a rotating OAuth provider for ~10 minutes; opencode-go is a single
+    // static key with nothing to rotate to, so even repeated auth failures stay capped at 5s.
+    manager.record_failure("opencode-go-abc12345", "auth", Some("Insufficient balance"));
+    manager.record_failure("opencode-go-abc12345", "auth", Some("Insufficient balance"));
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_secs_f64();
+    let snapshot = manager.snapshots().remove(0);
+    assert_eq!(snapshot["available"], false);
+    let remaining = snapshot["cooldownUntil"].as_f64().expect("cooldownUntil") - now;
+    assert!(
+        remaining > 0.0 && remaining <= 5.0,
+        "expected a flat <=5s cooldown, got {remaining}s"
+    );
+}

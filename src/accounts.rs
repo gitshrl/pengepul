@@ -19,6 +19,9 @@ const RATE_LIMIT_BACKOFF: (f64, f64) = (60.0, 15.0 * 60.0);
 const AUTH_BACKOFF: (f64, f64) = (10.0 * 60.0, 60.0 * 60.0);
 const SERVER_BACKOFF: (f64, f64) = (5.0, 5.0 * 60.0);
 const REAUTH_COOLDOWN_SECONDS: f64 = 24.0 * 60.0 * 60.0;
+/// opencode-go is a single static key: nothing to rotate to and no token to refresh, so any
+/// cooldown locks out every opencode-go model on a transient error. Keep it a flat 5s.
+const OPENCODE_GO_BACKOFF: (f64, f64) = (5.0, 5.0);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RefreshPolicyKind {
@@ -282,7 +285,7 @@ impl AccountManager {
         state.last_failure_at = Some(now_iso());
         state.last_error =
             Some(detail.map_or_else(|| kind.to_string(), |detail| format!("{kind}: {detail}")));
-        let (base, maximum) = failure_backoff(kind);
+        let (base, maximum) = failure_backoff(self.provider, kind);
         let multiplier = 2_f64.powi(i32::try_from(state.failure_count - 1).unwrap_or(0));
         state.cooldown_until = unix_now() + (base * multiplier).min(maximum);
     }
@@ -446,7 +449,10 @@ impl AccountManager {
     }
 }
 
-fn failure_backoff(kind: &str) -> (f64, f64) {
+fn failure_backoff(provider: ProviderId, kind: &str) -> (f64, f64) {
+    if provider == ProviderId::OpenCodeGo {
+        return OPENCODE_GO_BACKOFF;
+    }
     match kind {
         "rate_limit" => RATE_LIMIT_BACKOFF,
         "auth" | "forbidden" => AUTH_BACKOFF,

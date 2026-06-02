@@ -69,6 +69,10 @@ impl ProviderRegistry {
 /// Prefix that routes a model to the opencode-go provider, e.g. `opencode-go/glm-5.1`.
 pub const OPENCODE_GO_PREFIX: &str = "opencode-go/";
 
+/// Shorthand alias accepted on input: clients naturally write `opencode/` since the upstream
+/// service is opencode.ai. `/v1/models` still advertises the canonical `opencode-go/` form.
+pub const OPENCODE_PREFIX: &str = "opencode/";
+
 /// Model ids served by opencode-go (from the models.dev catalog), reported on `/v1/models`.
 pub const OPENCODE_GO_MODELS: [&str; 15] = [
     "glm-5.1",
@@ -98,10 +102,14 @@ pub const OPENCODE_GO_FREE_MODELS: [&str; 5] = [
     "nemotron-3-super-free",
 ];
 
-/// Strip the `opencode-go/` routing prefix to get the upstream model id.
+/// Strip the opencode routing prefix (canonical `opencode-go/` or the `opencode/` alias) to
+/// get the upstream model id.
 #[must_use]
 pub fn strip_opencode_go_prefix(model: &str) -> &str {
-    model.strip_prefix(OPENCODE_GO_PREFIX).unwrap_or(model)
+    model
+        .strip_prefix(OPENCODE_GO_PREFIX)
+        .or_else(|| model.strip_prefix(OPENCODE_PREFIX))
+        .unwrap_or(model)
 }
 
 /// True when `model` (with or without the `opencode-go/` prefix) is a free-tier zen model.
@@ -111,7 +119,7 @@ pub fn is_opencode_go_free_model(model: &str) -> bool {
 }
 
 fn opencode_go_matches_model(model: &str) -> bool {
-    model.starts_with(OPENCODE_GO_PREFIX)
+    model.starts_with(OPENCODE_GO_PREFIX) || model.starts_with(OPENCODE_PREFIX)
 }
 
 #[must_use]
@@ -159,6 +167,11 @@ mod tests {
             registry.for_model("opencode-go/glm-5.1").id,
             ProviderId::OpenCodeGo
         );
+        // the `opencode/` alias routes to the same provider, not the anthropic fallback.
+        assert_eq!(
+            registry.for_model("opencode/deepseek-v4-flash-free").id,
+            ProviderId::OpenCodeGo
+        );
         // a bare opencode-go model id (no prefix) must NOT hijack other providers.
         assert_eq!(registry.for_model("glm-5.1").id, ProviderId::Anthropic);
         assert_eq!(
@@ -173,6 +186,11 @@ mod tests {
         assert_eq!(
             strip_opencode_go_prefix("opencode-go/kimi-k2.6"),
             "kimi-k2.6"
+        );
+        // the `opencode/` alias is stripped to the same bare upstream id.
+        assert_eq!(
+            strip_opencode_go_prefix("opencode/deepseek-v4-flash-free"),
+            "deepseek-v4-flash-free"
         );
         assert_eq!(strip_opencode_go_prefix("kimi-k2.6"), "kimi-k2.6");
     }

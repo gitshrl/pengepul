@@ -53,8 +53,9 @@ Prefer the import path: a key passed via `--key` is visible in process listings 
 shell history, whereas the import reads it directly from opencode's stored credentials.
 
 Route opencode-go models with the `opencode-go/` prefix on `/v1/chat/completions`, e.g.
-`opencode-go/glm-5.1` (paid) or `opencode-go/deepseek-v4-flash-free` (free). The available ids
-are listed by `GET /v1/models` once a key is loaded.
+`opencode-go/glm-5.1` (paid) or `opencode-go/deepseek-v4-flash-free` (free); the shorthand
+`opencode/` prefix is also accepted. The available ids are listed by `GET /v1/models` once a
+key is loaded.
 
 Tokens are stored under `~/.pengepul` by default.
 
@@ -259,8 +260,8 @@ curl -sS http://127.0.0.1:8317/v1/responses \
   }'
 ```
 
-opencode-go chat completion. Route the model with the `opencode-go/` prefix; list the
-available ids with `GET /v1/models` once a key is loaded:
+opencode-go chat completion. Route the model with the `opencode-go/` prefix (or the
+`opencode/` shorthand); list the available ids with `GET /v1/models` once a key is loaded:
 
 ```bash
 curl -sS http://127.0.0.1:8317/v1/chat/completions \
@@ -296,10 +297,14 @@ curl -sS http://127.0.0.1:8317/v1/chat/completions \
   }'
 ```
 
+Some free models (e.g. `deepseek-v4-flash-free`) are reasoning models that spend tokens on
+hidden reasoning first. Leave `max_tokens` unset or generous — too small a cap is consumed by
+reasoning and `content` comes back empty with `finish_reason: length`.
+
 ## Behavior
 
 - Account selection is round-robin with short sticky windows.
-- Failed accounts enter provider-specific cooldowns.
+- Failed accounts enter provider-specific cooldowns: OAuth providers back off progressively (up to ~1h on auth failures), while opencode-go's single static key uses a flat 5s so one transient error can't lock out every opencode model.
 - Tokens refresh before expiry or on the configured Codex refresh cadence.
 - Streaming responses are translated between Anthropic SSE, OpenAI chat chunks, and Responses API events.
 - Request body size is bounded by `body-limit`.
