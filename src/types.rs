@@ -4,6 +4,44 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProviderKind {
+    Anthropic,
+    Codex,
+    Opencode,
+}
+
+impl ProviderKind {
+    #[must_use]
+    pub const fn canonical_id(self) -> &'static str {
+        match self {
+            Self::Anthropic => "anthropic",
+            Self::Codex => "codex",
+            Self::Opencode => "opencode",
+        }
+    }
+}
+
+impl fmt::Display for ProviderKind {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.canonical_id())
+    }
+}
+
+impl FromStr for ProviderKind {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "anthropic" | "claude" => Ok(Self::Anthropic),
+            "codex" => Ok(Self::Codex),
+            "opencode" => Ok(Self::Opencode),
+            other => Err(format!("unknown provider kind: {other}")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ProviderId {
     Anthropic,
@@ -110,7 +148,7 @@ impl std::error::Error for RefreshTokenExhaustedError {}
 
 #[cfg(test)]
 mod tests {
-    use super::ProviderId;
+    use super::{ProviderId, ProviderKind};
 
     #[test]
     fn provider_id_parses_and_displays() {
@@ -118,5 +156,26 @@ mod tests {
         assert_eq!(ProviderId::Opencode.to_string(), "opencode");
         assert_eq!(ProviderId::Opencode.storage_prefix(), "opencode");
         assert!("nope".parse::<ProviderId>().is_err());
+    }
+
+    #[test]
+    fn provider_kind_canonical_ids_are_kebab_case() {
+        assert_eq!(ProviderKind::Anthropic.canonical_id(), "anthropic");
+        assert_eq!(ProviderKind::Codex.canonical_id(), "codex");
+        assert_eq!(ProviderKind::Opencode.canonical_id(), "opencode");
+    }
+
+    #[test]
+    fn provider_kind_parses_from_str() {
+        assert_eq!(
+            "anthropic".parse::<ProviderKind>(),
+            Ok(ProviderKind::Anthropic)
+        );
+        assert_eq!("codex".parse::<ProviderKind>(), Ok(ProviderKind::Codex));
+        assert_eq!(
+            "opencode".parse::<ProviderKind>(),
+            Ok(ProviderKind::Opencode)
+        );
+        assert!("nope".parse::<ProviderKind>().is_err());
     }
 }
