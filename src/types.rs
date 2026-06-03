@@ -72,7 +72,8 @@ impl ProviderId {
         Self::new(ProviderKind::Opencode, "opencode")
     }
 
-    /// Subdirectory under `auth_dir` where this provider's credential files live.
+    /// Returns the provider id, which Task 3 will use as the subdirectory under `auth_dir`
+    /// where this provider's credential files live. Until then, file layout is unchanged.
     #[must_use]
     pub fn storage_dir(&self) -> &str {
         &self.id
@@ -90,7 +91,7 @@ impl FromStr for ProviderId {
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         let kind = value.parse::<ProviderKind>()?;
-        Ok(Self::new(kind, value))
+        Ok(Self::new(kind, kind.canonical_id()))
     }
 }
 
@@ -219,5 +220,12 @@ mod tests {
         ] {
             assert_eq!(kind.canonical_id().parse::<ProviderKind>(), Ok(kind));
         }
+    }
+
+    #[test]
+    fn provider_id_from_str_canonicalises_aliases() {
+        let from_claude: ProviderId = "claude".parse().expect("parse");
+        assert_eq!(from_claude, ProviderId::anthropic());
+        assert_eq!(&*from_claude.id, "anthropic");
     }
 }

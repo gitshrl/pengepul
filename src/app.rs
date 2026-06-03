@@ -783,11 +783,12 @@ async fn route_codex_request(
         {
             Ok(response) => {
                 let accounting =
-                    stream_accounting(state, ProviderId::codex(), account, response.status).await;
-                sse_upstream_response(response, ProviderId::codex(), route, model, accounting)
+                    stream_accounting(state, account.provider.clone(), account, response.status)
+                        .await;
+                sse_upstream_response(response, account.provider.clone(), route, model, accounting)
             }
             Err(error) => {
-                upstream_failure_response(state, ProviderId::codex(), account, &error).await
+                upstream_failure_response(state, account.provider.clone(), account, &error).await
             }
         };
     }
@@ -802,10 +803,12 @@ async fn route_codex_request(
         .await
     {
         Ok(response) => {
-            record_json_result(state, ProviderId::codex(), account, &response).await;
-            json_upstream_response(response, &ProviderId::codex(), route, model)
+            record_json_result(state, account.provider.clone(), account, &response).await;
+            json_upstream_response(response, &account.provider, route, model)
         }
-        Err(error) => upstream_failure_response(state, ProviderId::codex(), account, &error).await,
+        Err(error) => {
+            upstream_failure_response(state, account.provider.clone(), account, &error).await
+        }
     }
 }
 
@@ -832,12 +835,12 @@ async fn route_anthropic_request(
         {
             Ok(response) => {
                 let accounting =
-                    stream_accounting(state, ProviderId::anthropic(), account, response.status)
+                    stream_accounting(state, account.provider.clone(), account, response.status)
                         .await;
-                sse_upstream_response(response, ProviderId::anthropic(), route, model, accounting)
+                sse_upstream_response(response, account.provider.clone(), route, model, accounting)
             }
             Err(error) => {
-                upstream_failure_response(state, ProviderId::anthropic(), account, &error).await
+                upstream_failure_response(state, account.provider.clone(), account, &error).await
             }
         };
     }
@@ -852,11 +855,11 @@ async fn route_anthropic_request(
         .await
     {
         Ok(response) => {
-            record_json_result(state, ProviderId::anthropic(), account, &response).await;
-            json_upstream_response(response, &ProviderId::anthropic(), route, model)
+            record_json_result(state, account.provider.clone(), account, &response).await;
+            json_upstream_response(response, &account.provider, route, model)
         }
         Err(error) => {
-            upstream_failure_response(state, ProviderId::anthropic(), account, &error).await
+            upstream_failure_response(state, account.provider.clone(), account, &error).await
         }
     }
 }
@@ -875,7 +878,7 @@ async fn route_opencode_request(
             StatusCode::NOT_IMPLEMENTED,
             "opencode models are only available on /v1/chat/completions",
             "unsupported_endpoint_for_provider",
-            ProviderId::opencode(),
+            account.provider.clone(),
         )
         .into_response();
     }
@@ -893,12 +896,12 @@ async fn route_opencode_request(
         {
             Ok(response) => {
                 let accounting =
-                    stream_accounting(state, ProviderId::opencode(), account, response.status)
+                    stream_accounting(state, account.provider.clone(), account, response.status)
                         .await;
-                sse_upstream_response(response, ProviderId::opencode(), route, model, accounting)
+                sse_upstream_response(response, account.provider.clone(), route, model, accounting)
             }
             Err(error) => {
-                upstream_failure_response(state, ProviderId::opencode(), account, &error).await
+                upstream_failure_response(state, account.provider.clone(), account, &error).await
             }
         };
     }
@@ -913,11 +916,11 @@ async fn route_opencode_request(
         .await
     {
         Ok(response) => {
-            record_json_result(state, ProviderId::opencode(), account, &response).await;
-            json_upstream_response(response, &ProviderId::opencode(), route, model)
+            record_json_result(state, account.provider.clone(), account, &response).await;
+            json_upstream_response(response, &account.provider, route, model)
         }
         Err(error) => {
-            upstream_failure_response(state, ProviderId::opencode(), account, &error).await
+            upstream_failure_response(state, account.provider.clone(), account, &error).await
         }
     }
 }
