@@ -9,8 +9,10 @@ use tempfile::tempdir;
 #[tokio::test]
 async fn since_last_refresh_refreshes_legacy_token_without_last_refresh() {
     let tmp = tempdir().expect("tempdir");
+    let codex_dir = tmp.path().join("codex");
+    fs::create_dir_all(&codex_dir).expect("codex dir");
     fs::write(
-        tmp.path().join("codex-bob_example_com.json"),
+        codex_dir.join("bob_example_com.json"),
         json!({
             "access_token": "old-access",
             "refresh_token": "old-refresh",
@@ -68,8 +70,10 @@ async fn since_last_refresh_refreshes_legacy_token_without_last_refresh() {
 #[tokio::test]
 async fn exhausted_refresh_token_marks_account_for_reauth() {
     let tmp = tempdir().expect("tempdir");
+    let codex_dir = tmp.path().join("codex");
+    fs::create_dir_all(&codex_dir).expect("codex dir");
     fs::write(
-        tmp.path().join("codex-bob_example_com.json"),
+        codex_dir.join("bob_example_com.json"),
         json!({
             "access_token": "old-access",
             "refresh_token": "old-refresh",
@@ -118,8 +122,10 @@ async fn exhausted_refresh_token_marks_account_for_reauth() {
 #[tokio::test]
 async fn failure_cooldown_doubles_from_one_second() {
     let tmp = tempdir().expect("tempdir");
+    let opencode_dir = tmp.path().join("opencode");
+    fs::create_dir_all(&opencode_dir).expect("opencode dir");
     fs::write(
-        tmp.path().join("opencode-key.json"),
+        opencode_dir.join("key.json"),
         json!({
             "access_token": "sk-opencode",
             "refresh_token": "",

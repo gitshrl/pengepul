@@ -32,12 +32,13 @@ pub fn save_token(auth_dir: &Path, token: &TokenData) -> Result<PathBuf> {
         .with_context(|| format!("failed to create {}", auth_dir.display()))?;
     set_mode(auth_dir, 0o700)?;
 
-    let filename = format!(
-        "{}-{}.json",
-        token.provider.storage_dir(),
-        sanitize_email(&token.email)
-    );
-    let path = auth_dir.join(filename);
+    let provider_dir = auth_dir.join(token.provider.storage_dir());
+    fs::create_dir_all(&provider_dir)
+        .with_context(|| format!("failed to create {}", provider_dir.display()))?;
+    set_mode(&provider_dir, 0o700)?;
+
+    let filename = format!("{}.json", sanitize_email(&token.email));
+    let path = provider_dir.join(filename);
     let stored = token_to_storage(token);
     fs::write(&path, serde_json::to_string_pretty(&stored)?)
         .with_context(|| format!("failed to write {}", path.display()))?;
@@ -57,49 +58,45 @@ pub fn load_all_tokens(auth_dir: &Path, provider: Option<&ProviderId>) -> Result
         return Ok(Vec::new());
     }
 
-    let prefix = provider.map(|provider| provider.storage_dir().to_string());
-    let mut paths = fs::read_dir(auth_dir)
-        .with_context(|| format!("failed to read {}", auth_dir.display()))?
-        .collect::<Result<Vec<_>, _>>()
-        .with_context(|| format!("failed to read {}", auth_dir.display()))?
-        .into_iter()
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.extension()
-                .is_some_and(|extension| extension == "json")
-        })
-        .collect::<Vec<_>>();
-    paths.sort();
+    let scan_dirs: Vec<PathBuf> = if let Some(provider) = provider {
+        vec![auth_dir.join(provider.storage_dir())]
+    } else {
+        // Scan every direct subdirectory; flat legacy files in auth_dir are handled by Task 6's
+        // migration (not by this read path).
+        fs::read_dir(auth_dir)
+            .with_context(|| format!("failed to read {}", auth_dir.display()))?
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_type().is_ok_and(|t| t.is_dir()))
+            .map(|entry| entry.path())
+            .collect()
+    };
 
     let mut tokens = Vec::new();
-    for path in paths {
-        let Some(filename) = path.file_name().and_then(|name| name.to_str()) else {
-            continue;
-        };
-        // `claude-` is the v0.1 Anthropic filename prefix; keep accepting it until the Task 6
-        // migration moves legacy files into per-id subdirectories.
-        if let Some(prefix) = &prefix {
-            let legacy_anthropic = prefix == "anthropic" && filename.starts_with("claude-");
-            if !filename.starts_with(&format!("{prefix}-")) && !legacy_anthropic {
-                continue;
-            }
-        } else if !(filename.starts_with("anthropic-")
-            || filename.starts_with("claude-")
-            || filename.starts_with("codex-")
-            || filename.starts_with("opencode-"))
-        {
+    for provider_dir in scan_dirs {
+        if !provider_dir.exists() {
             continue;
         }
+        let mut paths = fs::read_dir(&provider_dir)
+            .with_context(|| format!("failed to read {}", provider_dir.display()))?
+            .collect::<Result<Vec<_>, _>>()
+            .with_context(|| format!("failed to read {}", provider_dir.display()))?
+            .into_iter()
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
+            .collect::<Vec<_>>();
+        paths.sort();
 
-        let Some(stored) = fs::read_to_string(&path)
-            .ok()
-            .and_then(|text| serde_json::from_str::<StoredToken>(&text).ok())
-        else {
-            continue;
-        };
-        let token = storage_to_token(stored);
-        if provider.is_none_or(|provider| token.provider.kind == provider.kind) {
-            tokens.push(token);
+        for path in paths {
+            let Some(stored) = fs::read_to_string(&path)
+                .ok()
+                .and_then(|text| serde_json::from_str::<StoredToken>(&text).ok())
+            else {
+                continue;
+            };
+            let token = storage_to_token(stored);
+            if provider.is_none_or(|p| token.provider.kind == p.kind) {
+                tokens.push(token);
+            }
         }
     }
     Ok(tokens)
@@ -194,37 +191,40 @@ mod tests {
     }
 
     #[test]
-    fn save_token_uses_storage_dir_as_filename_prefix() {
+    fn save_token_writes_under_per_id_subdirectory() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path =
             save_token(dir.path(), &token(ProviderId::anthropic(), "alice@x.com")).expect("save");
-        let filename = path.file_name().unwrap().to_string_lossy().into_owned();
+        let relative = path.strip_prefix(dir.path()).expect("under dir");
+        let components: Vec<_> = relative
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(components.len(), 2, "{components:?}");
+        assert_eq!(components[0], "anthropic");
         assert!(
-            filename.starts_with("anthropic-"),
-            "filename was {filename}"
+            std::path::Path::new(&components[1])
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
         );
     }
 
     #[test]
-    fn load_all_tokens_reads_legacy_claude_filename() {
+    fn load_all_tokens_reads_per_id_subdirectories() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let legacy_path = dir.path().join("claude-alice@example.com.json");
-        std::fs::write(
-            &legacy_path,
-            r#"{
-                "access_token": "a",
-                "refresh_token": "r",
-                "email": "alice@example.com",
-                "type": "claude",
-                "expired": "2099-01-01T00:00:00Z",
-                "account_uuid": "u"
-            }"#,
-        )
-        .expect("write legacy fixture");
+        save_token(dir.path(), &token(ProviderId::anthropic(), "alice@x.com"))
+            .expect("save anthropic");
+        save_token(dir.path(), &token(ProviderId::codex(), "bob@y.com")).expect("save codex");
 
-        let loaded = load_all_tokens(dir.path(), Some(&ProviderId::anthropic())).expect("load");
-        assert_eq!(loaded.len(), 1, "expected one legacy token, got {loaded:?}");
-        assert_eq!(loaded[0].provider.kind, ProviderKind::Anthropic);
-        assert_eq!(loaded[0].email, "alice@example.com");
+        let all = load_all_tokens(dir.path(), None).expect("load");
+        assert_eq!(all.len(), 2);
+        let kinds: Vec<_> = all.iter().map(|t| t.provider.kind).collect();
+        assert!(kinds.contains(&ProviderKind::Anthropic));
+        assert!(kinds.contains(&ProviderKind::Codex));
+
+        let just_anthropic =
+            load_all_tokens(dir.path(), Some(&ProviderId::anthropic())).expect("load anthropic");
+        assert_eq!(just_anthropic.len(), 1);
+        assert_eq!(just_anthropic[0].provider.kind, ProviderKind::Anthropic);
     }
 }

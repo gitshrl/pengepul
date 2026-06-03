@@ -1,5 +1,6 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
+use std::path::PathBuf;
 
 use pengepul::config::{load_config, selected_config_path};
 use pengepul::oauth::{
@@ -11,6 +12,26 @@ use pengepul::tokens::{load_all_tokens, save_token};
 use pengepul::translate::resolve_model;
 use pengepul::types::{PkceCodes, ProviderId, TokenData};
 use tempfile::tempdir;
+
+fn walk_json_files(root: &std::path::Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for entry in fs::read_dir(root).expect("read dir") {
+        let entry = entry.expect("entry");
+        if !entry.file_type().expect("file type").is_dir() {
+            continue;
+        }
+        for sub in fs::read_dir(entry.path()).expect("read subdir") {
+            let path = sub.expect("sub entry").path();
+            if path
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
+            {
+                out.push(path.strip_prefix(root).expect("under root").to_path_buf());
+            }
+        }
+    }
+    out
+}
 
 fn jwt(payload: &serde_json::Value) -> String {
     use base64::Engine;
@@ -154,23 +175,14 @@ fn token_storage_round_trips_provider_files() {
     )
     .expect("save opencode");
 
-    let mut files = fs::read_dir(tmp.path())
-        .expect("read dir")
-        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
-        .filter(|name| {
-            std::path::Path::new(name)
-                .extension()
-                .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
-        })
-        .collect::<Vec<_>>();
+    let mut files = walk_json_files(tmp.path());
     files.sort();
-
     assert_eq!(
         files,
         [
-            "anthropic-alice@example.com.json",
-            "codex-bob@example.com.json",
-            "opencode-opencode-acct.json"
+            PathBuf::from("anthropic").join("alice@example.com.json"),
+            PathBuf::from("codex").join("bob@example.com.json"),
+            PathBuf::from("opencode").join("opencode-acct.json"),
         ]
     );
     let anthropic: ProviderId = "anthropic".parse().unwrap();
