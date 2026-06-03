@@ -72,8 +72,8 @@ impl ProviderId {
         Self::new(ProviderKind::Opencode, "opencode")
     }
 
-    /// Returns the provider id. Used as the filename prefix in `tokens::save_token`;
-    /// Task 4 will reuse it as the per-id subdirectory name under `auth_dir`.
+    /// Returns the per-id subdirectory name under `auth_dir`,
+    /// used by `tokens::save_token` and `tokens::load_all_tokens`.
     #[must_use]
     pub fn storage_dir(&self) -> &str {
         &self.id

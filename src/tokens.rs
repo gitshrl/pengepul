@@ -63,12 +63,20 @@ pub fn load_all_tokens(auth_dir: &Path, provider: Option<&ProviderId>) -> Result
     } else {
         // Scan every direct subdirectory; flat legacy files in auth_dir are handled by Task 6's
         // migration (not by this read path).
-        fs::read_dir(auth_dir)
+        let mut dirs = Vec::new();
+        for entry in fs::read_dir(auth_dir)
             .with_context(|| format!("failed to read {}", auth_dir.display()))?
-            .filter_map(Result::ok)
-            .filter(|entry| entry.file_type().is_ok_and(|t| t.is_dir()))
-            .map(|entry| entry.path())
-            .collect()
+        {
+            let entry =
+                entry.with_context(|| format!("failed to read entry in {}", auth_dir.display()))?;
+            let file_type = entry
+                .file_type()
+                .with_context(|| format!("failed to stat {}", entry.path().display()))?;
+            if file_type.is_dir() {
+                dirs.push(entry.path());
+            }
+        }
+        dirs
     };
 
     let mut tokens = Vec::new();
@@ -87,11 +95,17 @@ pub fn load_all_tokens(auth_dir: &Path, provider: Option<&ProviderId>) -> Result
         paths.sort();
 
         for path in paths {
-            let Some(stored) = fs::read_to_string(&path)
-                .ok()
-                .and_then(|text| serde_json::from_str::<StoredToken>(&text).ok())
-            else {
-                continue;
+            let stored = match fs::read_to_string(&path)
+                .with_context(|| format!("failed to read {}", path.display()))
+                .and_then(|text| {
+                    serde_json::from_str::<StoredToken>(&text)
+                        .with_context(|| format!("failed to parse {}", path.display()))
+                }) {
+                Ok(stored) => stored,
+                Err(error) => {
+                    tracing::warn!(?error, path = %path.display(), "skipping unreadable token file");
+                    continue;
+                }
             };
             let token = storage_to_token(stored);
             if provider.is_none_or(|p| token.provider.kind == p.kind) {
