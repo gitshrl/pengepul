@@ -72,8 +72,8 @@ impl ProviderId {
         Self::new(ProviderKind::Opencode, "opencode")
     }
 
-    /// Returns the provider id, which Task 3 will use as the subdirectory under `auth_dir`
-    /// where this provider's credential files live. Until then, file layout is unchanged.
+    /// Returns the provider id. Used as the filename prefix in `tokens::save_token`;
+    /// Task 4 will reuse it as the per-id subdirectory name under `auth_dir`.
     #[must_use]
     pub fn storage_dir(&self) -> &str {
         &self.id

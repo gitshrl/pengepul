@@ -76,8 +76,11 @@ pub fn load_all_tokens(auth_dir: &Path, provider: Option<&ProviderId>) -> Result
         let Some(filename) = path.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
+        // `claude-` is the v0.1 Anthropic filename prefix; keep accepting it until the Task 6
+        // migration moves legacy files into per-id subdirectories.
         if let Some(prefix) = &prefix {
-            if !filename.starts_with(&format!("{prefix}-")) {
+            let legacy_anthropic = prefix == "anthropic" && filename.starts_with("claude-");
+            if !filename.starts_with(&format!("{prefix}-")) && !legacy_anthropic {
                 continue;
             }
         } else if !(filename.starts_with("anthropic-")
@@ -107,6 +110,9 @@ fn token_to_storage(token: &TokenData) -> StoredToken {
         access_token: token.access_token.clone(),
         refresh_token: token.refresh_token.clone(),
         email: Some(token.email.clone()),
+        // The on-disk `token_type` discriminator is frozen at the v0.1 names ("claude" for
+        // Anthropic, etc.) so files written by this version still load on older builds.
+        // Filename prefixes (`anthropic-` etc.) are decoupled from this — see `save_token`.
         token_type: Some(match token.provider.kind {
             ProviderKind::Anthropic => "claude".to_string(),
             ProviderKind::Codex => "codex".to_string(),
@@ -171,7 +177,7 @@ fn set_mode(_path: &Path, _mode: u32) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ProviderId, TokenData, save_token};
+    use super::{ProviderId, ProviderKind, TokenData, load_all_tokens, save_token};
 
     fn token(provider: ProviderId, email: &str) -> TokenData {
         TokenData {
@@ -197,5 +203,28 @@ mod tests {
             filename.starts_with("anthropic-"),
             "filename was {filename}"
         );
+    }
+
+    #[test]
+    fn load_all_tokens_reads_legacy_claude_filename() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let legacy_path = dir.path().join("claude-alice@example.com.json");
+        std::fs::write(
+            &legacy_path,
+            r#"{
+                "access_token": "a",
+                "refresh_token": "r",
+                "email": "alice@example.com",
+                "type": "claude",
+                "expired": "2099-01-01T00:00:00Z",
+                "account_uuid": "u"
+            }"#,
+        )
+        .expect("write legacy fixture");
+
+        let loaded = load_all_tokens(dir.path(), Some(&ProviderId::anthropic())).expect("load");
+        assert_eq!(loaded.len(), 1, "expected one legacy token, got {loaded:?}");
+        assert_eq!(loaded[0].provider.kind, ProviderKind::Anthropic);
+        assert_eq!(loaded[0].email, "alice@example.com");
     }
 }
