@@ -9,7 +9,7 @@ use pengepul::oauth::{
 use pengepul::providers::build_registry;
 use pengepul::tokens::{load_all_tokens, save_token};
 use pengepul::translate::resolve_model;
-use pengepul::types::{PkceCodes, TokenData};
+use pengepul::types::{PkceCodes, ProviderId, TokenData};
 use tempfile::tempdir;
 
 fn jwt(payload: &serde_json::Value) -> String {
@@ -173,8 +173,11 @@ fn token_storage_round_trips_provider_files() {
             "opencode-opencode-acct.json"
         ]
     );
+    let anthropic: ProviderId = "anthropic".parse().unwrap();
+    let codex: ProviderId = "codex".parse().unwrap();
+    let opencode: ProviderId = "opencode".parse().unwrap();
     assert_eq!(
-        load_all_tokens(tmp.path(), Some("anthropic".parse().unwrap()))
+        load_all_tokens(tmp.path(), Some(&anthropic))
             .expect("load anthropic")
             .into_iter()
             .map(|token| token.email)
@@ -182,7 +185,7 @@ fn token_storage_round_trips_provider_files() {
         ["alice@example.com"]
     );
     assert_eq!(
-        load_all_tokens(tmp.path(), Some("codex".parse().unwrap()))
+        load_all_tokens(tmp.path(), Some(&codex))
             .expect("load codex")
             .into_iter()
             .map(|token| token.email)
@@ -190,7 +193,7 @@ fn token_storage_round_trips_provider_files() {
         ["bob@example.com"]
     );
     assert_eq!(
-        load_all_tokens(tmp.path(), Some("opencode".parse().unwrap()))
+        load_all_tokens(tmp.path(), Some(&opencode))
             .expect("load opencode")
             .into_iter()
             .map(|token| token.email)
@@ -208,7 +211,7 @@ fn registry_routes_anthropic_codex_and_opencode() {
         registry
             .all()
             .iter()
-            .map(|provider| provider.id)
+            .map(|provider| provider.id.clone())
             .collect::<Vec<_>>(),
         [
             "anthropic".parse().unwrap(),

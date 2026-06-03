@@ -15,7 +15,7 @@ use crate::oauth::{
 use crate::providers::ProviderRegistry;
 use crate::service::{ServiceOptions, run_command};
 use crate::tokens::save_token;
-use crate::types::{PkceCodes, ProviderId, TokenData};
+use crate::types::{PkceCodes, ProviderId, ProviderKind, TokenData};
 use crate::utils::{generate_pkce_codes, random_urlsafe, sha256_hex};
 
 /// Install the tracing subscriber for `serve`.
@@ -131,12 +131,12 @@ impl CliRuntime for RealRuntime {
         manual: bool,
         key: Option<&str>,
     ) -> Result<String> {
-        if provider == ProviderId::Opencode {
+        if provider.kind == ProviderKind::Opencode {
             return save_opencode_login(config, key);
         }
         let state = random_urlsafe(32);
         let pkce = generate_pkce_codes();
-        let auth_url = auth_url(provider, &state, &pkce);
+        let auth_url = auth_url(&provider, &state, &pkce);
         println!("\nOpen this URL to authorize {provider}:\n\n{auth_url}\n");
         if !manual {
             open_browser(&auth_url);
@@ -144,18 +144,18 @@ impl CliRuntime for RealRuntime {
         let callback = if manual {
             manual_callback()?
         } else {
-            let (port, path) = callback_endpoint(provider)?;
+            let (port, path) = callback_endpoint(&provider)?;
             wait_for_callback(port, path, Duration::from_mins(5))?
         };
         let token = self.runtime.block_on(async {
-            match provider {
-                ProviderId::Anthropic => {
+            match provider.kind {
+                ProviderKind::Anthropic => {
                     exchange_anthropic_code(&callback.code, &callback.state, &state, &pkce).await
                 }
-                ProviderId::Codex => {
+                ProviderKind::Codex => {
                     exchange_codex_code(&callback.code, &callback.state, &state, &pkce).await
                 }
-                ProviderId::Opencode => {
+                ProviderKind::Opencode => {
                     unreachable!("opencode login is handled before the OAuth flow")
                 }
             }
@@ -234,23 +234,23 @@ struct CallbackResult {
     state: String,
 }
 
-fn auth_url(provider: ProviderId, state: &str, pkce: &PkceCodes) -> String {
-    match provider {
-        ProviderId::Anthropic => generate_anthropic_auth_url(state, pkce),
-        ProviderId::Codex => generate_codex_auth_url(state, pkce),
-        ProviderId::Opencode => unreachable!("opencode has no OAuth authorize URL"),
+fn auth_url(provider: &ProviderId, state: &str, pkce: &PkceCodes) -> String {
+    match provider.kind {
+        ProviderKind::Anthropic => generate_anthropic_auth_url(state, pkce),
+        ProviderKind::Codex => generate_codex_auth_url(state, pkce),
+        ProviderKind::Opencode => unreachable!("opencode has no OAuth authorize URL"),
     }
 }
 
-fn callback_endpoint(provider: ProviderId) -> Result<(u16, &'static str)> {
-    match provider {
-        ProviderId::Anthropic => {
+fn callback_endpoint(provider: &ProviderId) -> Result<(u16, &'static str)> {
+    match provider.kind {
+        ProviderKind::Anthropic => {
             let url = url::Url::parse(ANTHROPIC_REDIRECT_URI)?;
             let port = url.port().context("Anthropic redirect URI has no port")?;
             Ok((port, "/callback"))
         }
-        ProviderId::Codex => Ok((CODEX_CALLBACK_PORT, CODEX_CALLBACK_PATH)),
-        ProviderId::Opencode => bail!("opencode has no OAuth callback"),
+        ProviderKind::Codex => Ok((CODEX_CALLBACK_PORT, CODEX_CALLBACK_PATH)),
+        ProviderKind::Opencode => bail!("opencode has no OAuth callback"),
     }
 }
 
@@ -272,7 +272,7 @@ fn save_opencode_login(config: &Config, key: Option<&str>) -> Result<String> {
         email: email.clone(),
         expires_at: "9999-12-31T23:59:59Z".to_string(),
         account_uuid: String::new(),
-        provider: ProviderId::Opencode,
+        provider: ProviderId::opencode(),
         id_token: None,
         last_refresh_at: None,
         plan_type: None,

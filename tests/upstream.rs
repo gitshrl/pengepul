@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 
 use pengepul::config::{CloakingConfig, Config, DebugMode, TimeoutConfig};
-use pengepul::types::{AvailableAccount, ProviderId, TokenData};
+use pengepul::types::{AvailableAccount, ProviderId, ProviderKind, TokenData};
 use pengepul::upstream::{
     anthropic_headers, apply_cloaking, build_beta_header, codex_headers,
     normalize_codex_responses_body, opencode_headers,
@@ -37,6 +37,7 @@ fn config() -> Config {
 }
 
 fn account(provider: ProviderId) -> AvailableAccount {
+    let is_codex = provider.kind == ProviderKind::Codex;
     AvailableAccount {
         token: TokenData {
             access_token: format!("{provider}-access"),
@@ -44,7 +45,7 @@ fn account(provider: ProviderId) -> AvailableAccount {
             email: format!("{provider}@example.com"),
             expires_at: "2030-01-01T00:00:00Z".to_string(),
             account_uuid: format!("acct-{provider}"),
-            provider,
+            provider: provider.clone(),
             id_token: None,
             last_refresh_at: None,
             plan_type: None,
@@ -52,7 +53,7 @@ fn account(provider: ProviderId) -> AvailableAccount {
         device_id: "device-123".to_string(),
         account_uuid: format!("acct-{provider}"),
         provider,
-        chatgpt_account_id: (provider == ProviderId::Codex).then(|| "chatgpt-account".to_string()),
+        chatgpt_account_id: is_codex.then(|| "chatgpt-account".to_string()),
     }
 }
 
@@ -102,7 +103,7 @@ fn apply_cloaking_injects_billing_prefix_and_metadata() {
     let cloaked = apply_cloaking(
         &body,
         &request_headers,
-        &account(ProviderId::Anthropic),
+        &account(ProviderId::anthropic()),
         &config(),
     );
 
@@ -156,7 +157,7 @@ fn opencode_headers_use_bearer_auth() {
 
 #[test]
 fn codex_headers_include_account_and_cloaking() {
-    let headers = codex_headers(&account(ProviderId::Codex), true, &config());
+    let headers = codex_headers(&account(ProviderId::codex()), true, &config());
 
     assert_eq!(headers["Authorization"], "Bearer codex-access");
     assert_eq!(headers["Accept"], "text/event-stream");

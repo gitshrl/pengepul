@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::types::{ProviderId, TokenData};
+use crate::types::{ProviderId, ProviderKind, TokenData};
 use crate::utils::{decode_jwt_payload, now_iso, sanitize_email};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -34,7 +34,7 @@ pub fn save_token(auth_dir: &Path, token: &TokenData) -> Result<PathBuf> {
 
     let filename = format!(
         "{}-{}.json",
-        token.provider.storage_prefix(),
+        legacy_filename_prefix(token.provider.kind),
         sanitize_email(&token.email)
     );
     let path = auth_dir.join(filename);
@@ -52,12 +52,12 @@ pub fn save_token(auth_dir: &Path, token: &TokenData) -> Result<PathBuf> {
 /// # Errors
 ///
 /// Returns an error when the auth directory exists but cannot be read.
-pub fn load_all_tokens(auth_dir: &Path, provider: Option<ProviderId>) -> Result<Vec<TokenData>> {
+pub fn load_all_tokens(auth_dir: &Path, provider: Option<&ProviderId>) -> Result<Vec<TokenData>> {
     if !auth_dir.exists() {
         return Ok(Vec::new());
     }
 
-    let prefix = provider.map(ProviderId::storage_prefix);
+    let prefix = provider.map(|provider| legacy_filename_prefix(provider.kind));
     let mut paths = fs::read_dir(auth_dir)
         .with_context(|| format!("failed to read {}", auth_dir.display()))?
         .collect::<Result<Vec<_>, _>>()
@@ -94,7 +94,7 @@ pub fn load_all_tokens(auth_dir: &Path, provider: Option<ProviderId>) -> Result<
             continue;
         };
         let token = storage_to_token(stored);
-        if provider.is_none_or(|provider| token.provider == provider) {
+        if provider.is_none_or(|provider| token.provider == *provider) {
             tokens.push(token);
         }
     }
@@ -106,11 +106,7 @@ fn token_to_storage(token: &TokenData) -> StoredToken {
         access_token: token.access_token.clone(),
         refresh_token: token.refresh_token.clone(),
         email: Some(token.email.clone()),
-        token_type: Some(match token.provider {
-            ProviderId::Anthropic => "claude".to_string(),
-            ProviderId::Codex => "codex".to_string(),
-            ProviderId::Opencode => "opencode".to_string(),
-        }),
+        token_type: Some(legacy_filename_prefix(token.provider.kind).to_string()),
         expired: token.expires_at.clone(),
         account_uuid: Some(token.account_uuid.clone()),
         id_token: token.id_token.clone(),
@@ -121,9 +117,9 @@ fn token_to_storage(token: &TokenData) -> StoredToken {
 
 fn storage_to_token(stored: StoredToken) -> TokenData {
     let provider = match stored.token_type.as_deref() {
-        Some("codex") => ProviderId::Codex,
-        Some("opencode") => ProviderId::Opencode,
-        _ => ProviderId::Anthropic,
+        Some("codex") => ProviderId::codex(),
+        Some("opencode") => ProviderId::opencode(),
+        _ => ProviderId::anthropic(),
     };
     let plan_type = stored
         .plan_type
@@ -139,6 +135,18 @@ fn storage_to_token(stored: StoredToken) -> TokenData {
         id_token: stored.id_token,
         last_refresh_at: stored.last_refresh,
         plan_type,
+    }
+}
+
+/// Legacy filename prefix for the v0.1 flat layout (`claude-…`, `codex-…`, `opencode-…`).
+///
+/// Anthropic deliberately maps to "claude" here to keep on-disk filenames stable; Task 3 of the
+/// multi-provider refactor switches the layout to `<storage_dir>/...` and retires this helper.
+const fn legacy_filename_prefix(kind: ProviderKind) -> &'static str {
+    match kind {
+        ProviderKind::Anthropic => "claude",
+        ProviderKind::Codex => "codex",
+        ProviderKind::Opencode => "opencode",
     }
 }
 

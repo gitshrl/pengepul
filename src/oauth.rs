@@ -224,7 +224,7 @@ fn anthropic_token(data: &Value) -> Result<TokenData> {
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_string(),
-        provider: ProviderId::Anthropic,
+        provider: ProviderId::anthropic(),
         id_token: None,
         last_refresh_at: None,
         plan_type: None,
@@ -259,7 +259,7 @@ fn codex_token(data: &Value) -> Result<TokenData> {
         email,
         expires_at: expires_in_iso(data.get("expires_in").and_then(Value::as_u64), 3600),
         account_uuid,
-        provider: ProviderId::Codex,
+        provider: ProviderId::codex(),
         id_token: Some(id_token),
         last_refresh_at: None,
         plan_type,

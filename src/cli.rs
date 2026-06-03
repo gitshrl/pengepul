@@ -7,7 +7,7 @@ use serde_json::Value;
 
 use crate::config::{Config, load_config, selected_config_path};
 use crate::providers::{ProviderRegistry, build_registry};
-use crate::types::ProviderId;
+use crate::types::{ProviderId, ProviderKind};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunOutcome {
@@ -473,11 +473,12 @@ fn login(
 ) -> Result<()> {
     let config = load_config(config_path, Some(home), cwd)?;
     let provider = provider.parse::<ProviderId>().map_err(anyhow::Error::msg)?;
-    if provider == ProviderId::Opencode && manual {
+    if provider.kind == ProviderKind::Opencode && manual {
         bail!("--manual is not supported for opencode (it uses a static API key, not OAuth)");
     }
+    let provider_label = provider.clone();
     let email = runtime.login(&config, provider, manual, key)?;
-    output.line(&format!("saved {provider} account token for {email}"));
+    output.line(&format!("saved {provider_label} account token for {email}"));
     Ok(())
 }
 

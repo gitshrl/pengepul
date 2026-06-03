@@ -114,10 +114,11 @@ impl CliRuntime for FakeRuntime {
         manual: bool,
         key: Option<&str>,
     ) -> Result<String> {
+        let email = format!("{provider}@example.com");
         self.login_provider = Some(provider);
         self.login_manual = Some(manual);
         self.login_key = key.map(ToOwned::to_owned);
-        Ok(format!("{provider}@example.com"))
+        Ok(email)
     }
 }
 
@@ -334,7 +335,7 @@ fn login_delegates_provider_and_manual_mode() {
         &mut runtime,
     );
 
-    assert_eq!(runtime.login_provider, Some(ProviderId::Codex));
+    assert_eq!(runtime.login_provider, Some(ProviderId::codex()));
     assert_eq!(runtime.login_manual, Some(true));
     assert_eq!(
         outcome.stdout.trim(),
@@ -380,7 +381,7 @@ fn login_opencode_passes_key() {
         &mut runtime,
     );
 
-    assert_eq!(runtime.login_provider, Some(ProviderId::Opencode));
+    assert_eq!(runtime.login_provider, Some(ProviderId::opencode()));
     assert_eq!(runtime.login_key.as_deref(), Some("sk-go"));
     assert_eq!(
         outcome.stdout.trim(),

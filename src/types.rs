@@ -1,5 +1,6 @@
 use std::fmt;
 use std::str::FromStr;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
@@ -41,32 +42,46 @@ impl FromStr for ProviderKind {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ProviderId {
-    Anthropic,
-    Codex,
-    Opencode,
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ProviderId {
+    pub kind: ProviderKind,
+    pub id: Arc<str>,
 }
 
 impl ProviderId {
     #[must_use]
-    pub const fn storage_prefix(self) -> &'static str {
-        match self {
-            Self::Anthropic => "claude",
-            Self::Codex => "codex",
-            Self::Opencode => "opencode",
+    pub fn new(kind: ProviderKind, id: impl Into<Arc<str>>) -> Self {
+        Self {
+            kind,
+            id: id.into(),
         }
+    }
+
+    #[must_use]
+    pub fn anthropic() -> Self {
+        Self::new(ProviderKind::Anthropic, "anthropic")
+    }
+
+    #[must_use]
+    pub fn codex() -> Self {
+        Self::new(ProviderKind::Codex, "codex")
+    }
+
+    #[must_use]
+    pub fn opencode() -> Self {
+        Self::new(ProviderKind::Opencode, "opencode")
+    }
+
+    /// Subdirectory under `auth_dir` where this provider's credential files live.
+    #[must_use]
+    pub fn storage_dir(&self) -> &str {
+        &self.id
     }
 }
 
 impl fmt::Display for ProviderId {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Anthropic => formatter.write_str("anthropic"),
-            Self::Codex => formatter.write_str("codex"),
-            Self::Opencode => formatter.write_str("opencode"),
-        }
+        formatter.write_str(&self.id)
     }
 }
 
@@ -74,12 +89,8 @@ impl FromStr for ProviderId {
     type Err = String;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value {
-            "anthropic" | "claude" => Ok(Self::Anthropic),
-            "codex" => Ok(Self::Codex),
-            "opencode" => Ok(Self::Opencode),
-            other => Err(format!("unknown provider: {other}")),
-        }
+        let kind = value.parse::<ProviderKind>()?;
+        Ok(Self::new(kind, value))
     }
 }
 
@@ -149,13 +160,29 @@ impl std::error::Error for RefreshTokenExhaustedError {}
 #[cfg(test)]
 mod tests {
     use super::{ProviderId, ProviderKind};
+    use std::sync::Arc;
 
     #[test]
-    fn provider_id_parses_and_displays() {
-        assert_eq!("opencode".parse::<ProviderId>(), Ok(ProviderId::Opencode));
-        assert_eq!(ProviderId::Opencode.to_string(), "opencode");
-        assert_eq!(ProviderId::Opencode.storage_prefix(), "opencode");
-        assert!("nope".parse::<ProviderId>().is_err());
+    fn provider_id_struct_round_trips_via_kind() {
+        let id = ProviderId::new(ProviderKind::Anthropic, "anthropic");
+        assert_eq!(id.kind, ProviderKind::Anthropic);
+        assert_eq!(&*id.id, "anthropic");
+        assert_eq!(id.to_string(), "anthropic");
+    }
+
+    #[test]
+    fn provider_id_canonical_helpers_match_kind() {
+        assert_eq!(ProviderId::anthropic().kind, ProviderKind::Anthropic);
+        assert_eq!(&*ProviderId::anthropic().id, "anthropic");
+        assert_eq!(&*ProviderId::codex().id, "codex");
+        assert_eq!(&*ProviderId::opencode().id, "opencode");
+    }
+
+    #[test]
+    fn provider_id_clone_shares_arc() {
+        let a = ProviderId::anthropic();
+        let b = a.clone();
+        assert!(Arc::ptr_eq(&a.id, &b.id));
     }
 
     #[test]

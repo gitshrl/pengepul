@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 use crate::tokens::{load_all_tokens, save_token};
 use crate::types::{
-    AvailableAccount, ProviderId, RefreshTokenExhaustedError, TokenData, UsageData,
+    AvailableAccount, ProviderId, ProviderKind, RefreshTokenExhaustedError, TokenData, UsageData,
 };
 use crate::utils::{now_iso, sha256_hex};
 
@@ -135,7 +135,7 @@ impl AccountManager {
     ///
     /// Returns an error when the auth directory exists but cannot be read.
     pub fn load(&mut self) -> Result<()> {
-        for token in load_all_tokens(&self.auth_dir, Some(self.provider))? {
+        for token in load_all_tokens(&self.auth_dir, Some(&self.provider))? {
             self.upsert_loaded_token(token);
         }
         Ok(())
@@ -150,7 +150,7 @@ impl AccountManager {
         let mut added = Vec::new();
         let mut updated = Vec::new();
         let mut unchanged = Vec::new();
-        for token in load_all_tokens(&self.auth_dir, Some(self.provider))? {
+        for token in load_all_tokens(&self.auth_dir, Some(&self.provider))? {
             let Some(existing) = self.accounts.get_mut(&token.email) else {
                 added.push(token.email.clone());
                 self.upsert_loaded_token(token);
@@ -228,7 +228,7 @@ impl AccountManager {
             } else {
                 refreshed.account_uuid
             },
-            provider: self.provider,
+            provider: self.provider.clone(),
             id_token: refreshed.id_token.or(old_token.id_token),
             last_refresh_at: Some(refresh_at.clone()),
             plan_type: refreshed.plan_type.or(old_token.plan_type),
@@ -440,8 +440,8 @@ impl AccountManager {
             ))[..32]
                 .to_string(),
             account_uuid: state.token.account_uuid.clone(),
-            provider: self.provider,
-            chatgpt_account_id: (self.provider == ProviderId::Codex)
+            provider: self.provider.clone(),
+            chatgpt_account_id: (self.provider.kind == ProviderKind::Codex)
                 .then(|| state.token.account_uuid.clone()),
         }
     }

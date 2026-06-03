@@ -3,9 +3,9 @@ use std::path::Path;
 use regex::Regex;
 
 use crate::translate::resolve_model;
-use crate::types::ProviderId;
+use crate::types::{ProviderId, ProviderKind};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Provider {
     pub id: ProviderId,
     pub native_format: &'static str,
@@ -18,26 +18,25 @@ pub struct ProviderRegistry {
 
 impl ProviderRegistry {
     #[must_use]
-    pub fn get(&self, provider_id: ProviderId) -> Provider {
+    pub fn get(&self, provider_id: &ProviderId) -> Provider {
         if let Some(provider) = self
             .providers
             .iter()
-            .copied()
-            .find(|provider| provider.id == provider_id)
+            .find(|provider| &provider.id == provider_id)
         {
-            return provider;
+            return provider.clone();
         }
-        match provider_id {
-            ProviderId::Anthropic => Provider {
-                id: ProviderId::Anthropic,
+        match provider_id.kind {
+            ProviderKind::Anthropic => Provider {
+                id: ProviderId::anthropic(),
                 native_format: "anthropic-messages",
             },
-            ProviderId::Codex => Provider {
-                id: ProviderId::Codex,
+            ProviderKind::Codex => Provider {
+                id: ProviderId::codex(),
                 native_format: "openai-responses",
             },
-            ProviderId::Opencode => Provider {
-                id: ProviderId::Opencode,
+            ProviderKind::Opencode => Provider {
+                id: ProviderId::opencode(),
                 native_format: "openai-chat",
             },
         }
@@ -52,10 +51,10 @@ impl ProviderRegistry {
     pub fn for_model(&self, model: &str) -> Provider {
         let resolved = resolve_model(Some(model));
         if opencode_matches_model(&resolved) {
-            return self.get(ProviderId::Opencode);
+            return self.get(&ProviderId::opencode());
         }
-        let codex = self.get(ProviderId::Codex);
-        let anthropic = self.get(ProviderId::Anthropic);
+        let codex = self.get(&ProviderId::codex());
+        let anthropic = self.get(&ProviderId::anthropic());
         if codex_matches_model(&resolved) {
             return codex;
         }
@@ -119,15 +118,15 @@ pub fn build_registry(_auth_dir: &Path) -> ProviderRegistry {
     ProviderRegistry {
         providers: vec![
             Provider {
-                id: ProviderId::Anthropic,
+                id: ProviderId::anthropic(),
                 native_format: "anthropic-messages",
             },
             Provider {
-                id: ProviderId::Codex,
+                id: ProviderId::codex(),
                 native_format: "openai-responses",
             },
             Provider {
-                id: ProviderId::Opencode,
+                id: ProviderId::opencode(),
                 native_format: "openai-chat",
             },
         ],
@@ -157,19 +156,19 @@ mod tests {
         let registry = build_registry(Path::new("/tmp"));
         assert_eq!(
             registry.for_model("opencode/glm-5.1").id,
-            ProviderId::Opencode
+            ProviderId::opencode()
         );
         assert_eq!(
             registry.for_model("opencode/deepseek-v4-flash-free").id,
-            ProviderId::Opencode
+            ProviderId::opencode()
         );
         // a bare opencode model id (no prefix) must NOT hijack other providers.
-        assert_eq!(registry.for_model("glm-5.1").id, ProviderId::Anthropic);
+        assert_eq!(registry.for_model("glm-5.1").id, ProviderId::anthropic());
         assert_eq!(
             registry.for_model("claude-sonnet-4-6").id,
-            ProviderId::Anthropic
+            ProviderId::anthropic()
         );
-        assert_eq!(registry.for_model("gpt-5.4").id, ProviderId::Codex);
+        assert_eq!(registry.for_model("gpt-5.4").id, ProviderId::codex());
     }
 
     #[test]

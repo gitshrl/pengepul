@@ -33,7 +33,7 @@ use crate::translate::{
     chat_to_responses_request, openai_to_anthropic, resolve_model, responses_to_anthropic,
     responses_to_anthropic_message, responses_to_chat_completion,
 };
-use crate::types::{AvailableAccount, ProviderId, UsageData};
+use crate::types::{AvailableAccount, ProviderId, ProviderKind, UsageData};
 use crate::upstream::{
     ANTHROPIC_BASE_URL, CODEX_BASE_URL, CODEX_RESPONSES_PATH, anthropic_headers, apply_cloaking,
     codex_headers, normalize_codex_responses_body, opencode_base_url, opencode_headers,
@@ -388,13 +388,13 @@ pub fn create_app_with_upstream(config: Config, upstream: Arc<dyn UpstreamClient
 fn build_account_managers(config: &Config) -> AccountManagers {
     let mut anthropic = AccountManager::new(
         config.auth_dir.clone(),
-        ProviderId::Anthropic,
+        ProviderId::anthropic(),
         |refresh_token| Box::pin(refresh_anthropic_tokens(refresh_token)),
         RefreshPolicy::default(),
     );
     let mut codex = AccountManager::new(
         config.auth_dir.clone(),
-        ProviderId::Codex,
+        ProviderId::codex(),
         |refresh_token| Box::pin(refresh_codex_tokens(refresh_token)),
         RefreshPolicy {
             kind: RefreshPolicyKind::SinceLastRefresh,
@@ -403,7 +403,7 @@ fn build_account_managers(config: &Config) -> AccountManagers {
     );
     let mut opencode = AccountManager::new(
         config.auth_dir.clone(),
-        ProviderId::Opencode,
+        ProviderId::opencode(),
         |_refresh_token| {
             Box::pin(async { anyhow::bail!("opencode API keys do not support refresh") })
                 as RefreshFuture
@@ -443,21 +443,21 @@ async fn admin_accounts(State(state): State<AppState>, headers: HeaderMap) -> Re
     let opencode = state.account_managers.opencode.lock().await;
     let providers = serde_json::Map::from_iter([
         (
-            ProviderId::Anthropic.to_string(),
+            ProviderId::anthropic().to_string(),
             json!({
                 "accounts": anthropic.snapshots(),
                 "account_count": anthropic.account_count()
             }),
         ),
         (
-            ProviderId::Codex.to_string(),
+            ProviderId::codex().to_string(),
             json!({
                 "accounts": codex.snapshots(),
                 "account_count": codex.account_count()
             }),
         ),
         (
-            ProviderId::Opencode.to_string(),
+            ProviderId::opencode().to_string(),
             json!({
                 "accounts": opencode.snapshots(),
                 "account_count": opencode.account_count()
@@ -478,9 +478,9 @@ async fn admin_reload(State(state): State<AppState>, headers: HeaderMap) -> Resp
     let opencode = state.account_managers.opencode.lock().await.reload();
     let reloaded = match (anthropic, codex, opencode) {
         (Ok(anthropic), Ok(codex), Ok(opencode)) => serde_json::Map::from_iter([
-            (ProviderId::Anthropic.to_string(), anthropic),
-            (ProviderId::Codex.to_string(), codex),
-            (ProviderId::Opencode.to_string(), opencode),
+            (ProviderId::anthropic().to_string(), anthropic),
+            (ProviderId::codex().to_string(), codex),
+            (ProviderId::opencode().to_string(), opencode),
         ]),
         (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => {
             return AppError::simple(
@@ -510,23 +510,23 @@ async fn models(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let has_codex = state.account_managers.codex.lock().await.account_count() > 0;
     let has_opencode = state.account_managers.opencode.lock().await.account_count() > 0;
     let mut models = [
-        (ProviderId::Anthropic, "claude-sonnet-4-6"),
-        (ProviderId::Anthropic, "claude-opus-4-8"),
-        (ProviderId::Codex, "gpt-5.4"),
+        (ProviderKind::Anthropic, "claude-sonnet-4-6"),
+        (ProviderKind::Anthropic, "claude-opus-4-8"),
+        (ProviderKind::Codex, "gpt-5.4"),
     ]
     .into_iter()
-    .filter(|(provider, _)| match provider {
-        ProviderId::Anthropic => has_anthropic,
-        ProviderId::Codex => has_codex,
+    .filter(|(kind, _)| match kind {
+        ProviderKind::Anthropic => has_anthropic,
+        ProviderKind::Codex => has_codex,
         // opencode has no entry in this seed list; its models are appended below.
-        ProviderId::Opencode => false,
+        ProviderKind::Opencode => false,
     })
-    .map(|(provider, id)| {
+    .map(|(kind, id)| {
         json!({
             "id": id,
             "object": "model",
             "created": created,
-            "owned_by": provider.to_string()
+            "owned_by": kind.canonical_id()
         })
     })
     .collect::<Vec<_>>();
@@ -537,7 +537,7 @@ async fn models(State(state): State<AppState>, headers: HeaderMap) -> Response {
                 "id": format!("opencode/{id}"),
                 "object": "model",
                 "created": created,
-                "owned_by": ProviderId::Opencode.to_string()
+                "owned_by": ProviderId::opencode().to_string()
             })
         }));
     }
@@ -597,7 +597,10 @@ async fn count_tokens(State(state): State<AppState>, headers: HeaderMap, body: B
     };
     let model = resolve_model(body.get("model").and_then(Value::as_str));
     let provider = state.registry.for_model(&model);
-    if matches!(provider.id, ProviderId::Codex | ProviderId::Opencode) {
+    if matches!(
+        provider.id.kind,
+        ProviderKind::Codex | ProviderKind::Opencode
+    ) {
         return AppError::provider(
             StatusCode::NOT_IMPLEMENTED,
             format!(
@@ -609,7 +612,7 @@ async fn count_tokens(State(state): State<AppState>, headers: HeaderMap, body: B
         )
         .into_response();
     }
-    let account = match next_provider_account(&state, provider.id).await {
+    let account = match next_provider_account(&state, provider.id.clone()).await {
         Ok(account) => account,
         Err(error) => return error.into_response(),
     };
@@ -626,16 +629,23 @@ async fn count_tokens(State(state): State<AppState>, headers: HeaderMap, body: B
     {
         Ok(response) => {
             if response.status.is_success() {
-                record_provider_success(&state, provider.id, &account, None).await;
+                record_provider_success(&state, provider.id.clone(), &account, None).await;
             } else {
-                record_provider_failure(&state, provider.id, &account, response.status, None).await;
+                record_provider_failure(
+                    &state,
+                    provider.id.clone(),
+                    &account,
+                    response.status,
+                    None,
+                )
+                .await;
             }
             (response.status, Json(response.body)).into_response()
         }
         Err(error) => {
             record_provider_failure(
                 &state,
-                provider.id,
+                provider.id.clone(),
                 &account,
                 StatusCode::BAD_GATEWAY,
                 Some(&error.to_string()),
@@ -662,11 +672,13 @@ async fn route_provider_request(
     let model = resolve_model(body.get("model").and_then(Value::as_str));
     let provider = state.registry.for_model(&model);
     let client_wants_stream = body.get("stream").and_then(Value::as_bool).unwrap_or(false);
-    let attempts = provider_account_count(state, provider.id).await.max(1);
+    let attempts = provider_account_count(state, provider.id.clone())
+        .await
+        .max(1);
     let mut last_response = None;
 
     for _ in 0..attempts {
-        let account = match next_provider_account(state, provider.id).await {
+        let account = match next_provider_account(state, provider.id.clone()).await {
             Ok(account) => account,
             Err(error) if error.error_type == Some("token_refresh_failed") => {
                 last_response = Some(error.into_response());
@@ -674,8 +686,8 @@ async fn route_provider_request(
             }
             Err(error) => return last_response.unwrap_or_else(|| error.into_response()),
         };
-        let response = match provider.id {
-            ProviderId::Codex => {
+        let response = match provider.id.kind {
+            ProviderKind::Codex => {
                 route_codex_request(
                     state,
                     headers,
@@ -687,7 +699,7 @@ async fn route_provider_request(
                 )
                 .await
             }
-            ProviderId::Opencode => {
+            ProviderKind::Opencode => {
                 route_opencode_request(
                     state,
                     headers,
@@ -699,7 +711,7 @@ async fn route_provider_request(
                 )
                 .await
             }
-            ProviderId::Anthropic => {
+            ProviderKind::Anthropic => {
                 route_anthropic_request(
                     state,
                     headers,
@@ -730,15 +742,15 @@ async fn route_provider_request(
 }
 
 async fn provider_account_count(state: &AppState, provider: ProviderId) -> usize {
-    match provider {
-        ProviderId::Anthropic => state
+    match provider.kind {
+        ProviderKind::Anthropic => state
             .account_managers
             .anthropic
             .lock()
             .await
             .account_count(),
-        ProviderId::Codex => state.account_managers.codex.lock().await.account_count(),
-        ProviderId::Opencode => state.account_managers.opencode.lock().await.account_count(),
+        ProviderKind::Codex => state.account_managers.codex.lock().await.account_count(),
+        ProviderKind::Opencode => state.account_managers.opencode.lock().await.account_count(),
     }
 }
 
@@ -771,11 +783,11 @@ async fn route_codex_request(
         {
             Ok(response) => {
                 let accounting =
-                    stream_accounting(state, ProviderId::Codex, account, response.status).await;
-                sse_upstream_response(response, ProviderId::Codex, route, model, accounting)
+                    stream_accounting(state, ProviderId::codex(), account, response.status).await;
+                sse_upstream_response(response, ProviderId::codex(), route, model, accounting)
             }
             Err(error) => {
-                upstream_failure_response(state, ProviderId::Codex, account, &error).await
+                upstream_failure_response(state, ProviderId::codex(), account, &error).await
             }
         };
     }
@@ -790,10 +802,10 @@ async fn route_codex_request(
         .await
     {
         Ok(response) => {
-            record_json_result(state, ProviderId::Codex, account, &response).await;
-            json_upstream_response(response, ProviderId::Codex, route, model)
+            record_json_result(state, ProviderId::codex(), account, &response).await;
+            json_upstream_response(response, &ProviderId::codex(), route, model)
         }
-        Err(error) => upstream_failure_response(state, ProviderId::Codex, account, &error).await,
+        Err(error) => upstream_failure_response(state, ProviderId::codex(), account, &error).await,
     }
 }
 
@@ -820,11 +832,12 @@ async fn route_anthropic_request(
         {
             Ok(response) => {
                 let accounting =
-                    stream_accounting(state, ProviderId::Anthropic, account, response.status).await;
-                sse_upstream_response(response, ProviderId::Anthropic, route, model, accounting)
+                    stream_accounting(state, ProviderId::anthropic(), account, response.status)
+                        .await;
+                sse_upstream_response(response, ProviderId::anthropic(), route, model, accounting)
             }
             Err(error) => {
-                upstream_failure_response(state, ProviderId::Anthropic, account, &error).await
+                upstream_failure_response(state, ProviderId::anthropic(), account, &error).await
             }
         };
     }
@@ -839,11 +852,11 @@ async fn route_anthropic_request(
         .await
     {
         Ok(response) => {
-            record_json_result(state, ProviderId::Anthropic, account, &response).await;
-            json_upstream_response(response, ProviderId::Anthropic, route, model)
+            record_json_result(state, ProviderId::anthropic(), account, &response).await;
+            json_upstream_response(response, &ProviderId::anthropic(), route, model)
         }
         Err(error) => {
-            upstream_failure_response(state, ProviderId::Anthropic, account, &error).await
+            upstream_failure_response(state, ProviderId::anthropic(), account, &error).await
         }
     }
 }
@@ -862,7 +875,7 @@ async fn route_opencode_request(
             StatusCode::NOT_IMPLEMENTED,
             "opencode models are only available on /v1/chat/completions",
             "unsupported_endpoint_for_provider",
-            ProviderId::Opencode,
+            ProviderId::opencode(),
         )
         .into_response();
     }
@@ -880,11 +893,12 @@ async fn route_opencode_request(
         {
             Ok(response) => {
                 let accounting =
-                    stream_accounting(state, ProviderId::Opencode, account, response.status).await;
-                sse_upstream_response(response, ProviderId::Opencode, route, model, accounting)
+                    stream_accounting(state, ProviderId::opencode(), account, response.status)
+                        .await;
+                sse_upstream_response(response, ProviderId::opencode(), route, model, accounting)
             }
             Err(error) => {
-                upstream_failure_response(state, ProviderId::Opencode, account, &error).await
+                upstream_failure_response(state, ProviderId::opencode(), account, &error).await
             }
         };
     }
@@ -899,10 +913,12 @@ async fn route_opencode_request(
         .await
     {
         Ok(response) => {
-            record_json_result(state, ProviderId::Opencode, account, &response).await;
-            json_upstream_response(response, ProviderId::Opencode, route, model)
+            record_json_result(state, ProviderId::opencode(), account, &response).await;
+            json_upstream_response(response, &ProviderId::opencode(), route, model)
         }
-        Err(error) => upstream_failure_response(state, ProviderId::Opencode, account, &error).await,
+        Err(error) => {
+            upstream_failure_response(state, ProviderId::opencode(), account, &error).await
+        }
     }
 }
 
@@ -951,7 +967,7 @@ async fn upstream_failure_response(
 ) -> Response {
     record_provider_failure(
         state,
-        provider,
+        provider.clone(),
         account,
         StatusCode::BAD_GATEWAY,
         Some(&error.to_string()),
@@ -1080,17 +1096,17 @@ async fn next_provider_account(
     state: &AppState,
     provider: ProviderId,
 ) -> Result<AvailableAccount, AppError> {
-    let mut manager = match provider {
-        ProviderId::Anthropic => state.account_managers.anthropic.lock().await,
-        ProviderId::Codex => state.account_managers.codex.lock().await,
-        ProviderId::Opencode => state.account_managers.opencode.lock().await,
+    let mut manager = match provider.kind {
+        ProviderKind::Anthropic => state.account_managers.anthropic.lock().await,
+        ProviderKind::Codex => state.account_managers.codex.lock().await,
+        ProviderKind::Opencode => state.account_managers.opencode.lock().await,
     };
     let result = manager.next_account_result();
     let Some(account) = result.account else {
         return Err(AppError::provider(
             StatusCode::SERVICE_UNAVAILABLE,
             no_account_message(
-                provider,
+                &provider,
                 result.failure_kind.as_deref(),
                 result.retry_after_seconds,
             ),
@@ -1129,10 +1145,10 @@ async fn record_provider_success(
     account: &AvailableAccount,
     usage: Option<UsageData>,
 ) {
-    let mut manager = match provider {
-        ProviderId::Anthropic => state.account_managers.anthropic.lock().await,
-        ProviderId::Codex => state.account_managers.codex.lock().await,
-        ProviderId::Opencode => state.account_managers.opencode.lock().await,
+    let mut manager = match provider.kind {
+        ProviderKind::Anthropic => state.account_managers.anthropic.lock().await,
+        ProviderKind::Codex => state.account_managers.codex.lock().await,
+        ProviderKind::Opencode => state.account_managers.opencode.lock().await,
     };
     manager.record_success(account.token.email.as_str(), usage.as_ref());
 }
@@ -1144,10 +1160,10 @@ async fn record_provider_failure(
     status: StatusCode,
     detail: Option<&str>,
 ) {
-    let mut manager = match provider {
-        ProviderId::Anthropic => state.account_managers.anthropic.lock().await,
-        ProviderId::Codex => state.account_managers.codex.lock().await,
-        ProviderId::Opencode => state.account_managers.opencode.lock().await,
+    let mut manager = match provider.kind {
+        ProviderKind::Anthropic => state.account_managers.anthropic.lock().await,
+        ProviderKind::Codex => state.account_managers.codex.lock().await,
+        ProviderKind::Opencode => state.account_managers.opencode.lock().await,
     };
     manager.record_failure(
         account.token.email.as_str(),
@@ -1157,7 +1173,7 @@ async fn record_provider_failure(
 }
 
 fn no_account_message(
-    provider: ProviderId,
+    provider: &ProviderId,
     failure_kind: Option<&str>,
     retry_after_seconds: Option<f64>,
 ) -> String {
@@ -1247,25 +1263,25 @@ fn upstream_error_response(provider: ProviderId, error: &anyhow::Error) -> Respo
 
 fn json_upstream_response(
     response: UpstreamJsonResponse,
-    provider: ProviderId,
+    provider: &ProviderId,
     route: RequestRoute,
     model: &str,
 ) -> Response {
     if !response.status.is_success() {
         return (response.status, Json(response.body)).into_response();
     }
-    let body = match (provider, route) {
-        (ProviderId::Anthropic, RequestRoute::Chat) => anthropic_to_openai(&response.body, model),
-        (ProviderId::Anthropic, RequestRoute::Responses) => {
+    let body = match (provider.kind, route) {
+        (ProviderKind::Anthropic, RequestRoute::Chat) => anthropic_to_openai(&response.body, model),
+        (ProviderKind::Anthropic, RequestRoute::Responses) => {
             anthropic_to_responses(&response.body, model)
         }
-        (ProviderId::Anthropic, RequestRoute::Messages)
-        | (ProviderId::Codex, RequestRoute::Responses)
-        | (ProviderId::Opencode, _) => response.body,
-        (ProviderId::Codex, RequestRoute::Chat) => {
+        (ProviderKind::Anthropic, RequestRoute::Messages)
+        | (ProviderKind::Codex, RequestRoute::Responses)
+        | (ProviderKind::Opencode, _) => response.body,
+        (ProviderKind::Codex, RequestRoute::Chat) => {
             responses_to_chat_completion(&response.body, model)
         }
-        (ProviderId::Codex, RequestRoute::Messages) => {
+        (ProviderKind::Codex, RequestRoute::Messages) => {
             responses_to_anthropic_message(&response.body, model)
         }
     };
@@ -1282,7 +1298,7 @@ fn sse_upstream_response(
     let body = if response.status.is_success() {
         transformed_sse_stream(
             response.body,
-            provider,
+            provider.clone(),
             route,
             model.to_string(),
             accounting,
@@ -1339,9 +1355,9 @@ fn transformed_sse_stream(
                 }
             };
             for (event, raw) in events {
-                update_stream_usage(provider, &event, &raw, &mut usage, &mut completed);
+                update_stream_usage(&provider, &event, &raw, &mut usage, &mut completed);
                 for chunk in transform_sse_event(
-                    provider,
+                    &provider,
                     route,
                     &model,
                     &mut chat_state,
@@ -1363,9 +1379,9 @@ fn transformed_sse_stream(
             }
         };
         for (event, raw) in events {
-            update_stream_usage(provider, &event, &raw, &mut usage, &mut completed);
+            update_stream_usage(&provider, &event, &raw, &mut usage, &mut completed);
             for chunk in transform_sse_event(
-                provider,
+                &provider,
                 route,
                 &model,
                 &mut chat_state,
@@ -1389,7 +1405,7 @@ async fn record_stream_success(accounting: Option<&StreamAccounting>, usage: &Us
     if let Some(accounting) = accounting {
         record_provider_success(
             &accounting.state,
-            accounting.provider,
+            accounting.provider.clone(),
             &accounting.account,
             Some(usage.clone()),
         )
@@ -1401,7 +1417,7 @@ async fn record_stream_failure(accounting: Option<&StreamAccounting>, detail: &s
     if let Some(accounting) = accounting {
         record_provider_failure(
             &accounting.state,
-            accounting.provider,
+            accounting.provider.clone(),
             &accounting.account,
             StatusCode::BAD_GATEWAY,
             Some(detail),
@@ -1411,7 +1427,7 @@ async fn record_stream_failure(accounting: Option<&StreamAccounting>, detail: &s
 }
 
 fn update_stream_usage(
-    provider: ProviderId,
+    provider: &ProviderId,
     event: &str,
     raw: &str,
     usage: &mut UsageData,
@@ -1424,10 +1440,10 @@ fn update_stream_usage(
     let Ok(data) = serde_json::from_str::<Value>(raw) else {
         return;
     };
-    match provider {
-        ProviderId::Anthropic => update_anthropic_stream_usage(event, &data, usage, completed),
-        ProviderId::Codex => update_codex_stream_usage(event, &data, usage, completed),
-        ProviderId::Opencode => update_chat_stream_usage(&data, usage),
+    match provider.kind {
+        ProviderKind::Anthropic => update_anthropic_stream_usage(event, &data, usage, completed),
+        ProviderKind::Codex => update_codex_stream_usage(event, &data, usage, completed),
+        ProviderKind::Opencode => update_chat_stream_usage(&data, usage),
     }
 }
 
@@ -1494,7 +1510,7 @@ fn int_field_or(value: &Value, key: &str, default: i64) -> i64 {
 
 #[allow(clippy::too_many_arguments)]
 fn transform_sse_event(
-    provider: ProviderId,
+    provider: &ProviderId,
     route: RequestRoute,
     model: &str,
     chat_state: &mut ChatStreamState,
@@ -1504,18 +1520,18 @@ fn transform_sse_event(
     raw: &str,
 ) -> Vec<String> {
     if raw == "[DONE]" {
-        return match (provider, route) {
-            (ProviderId::Anthropic, RequestRoute::Messages)
-            | (ProviderId::Codex, RequestRoute::Responses)
-            | (ProviderId::Opencode, _) => vec!["data: [DONE]\n\n".to_string()],
+        return match (provider.kind, route) {
+            (ProviderKind::Anthropic, RequestRoute::Messages)
+            | (ProviderKind::Codex, RequestRoute::Responses)
+            | (ProviderKind::Opencode, _) => vec!["data: [DONE]\n\n".to_string()],
             _ => Vec::new(),
         };
     }
 
     let parsed = serde_json::from_str::<Value>(raw);
-    match (provider, route) {
-        (ProviderId::Anthropic, RequestRoute::Messages)
-        | (ProviderId::Codex, RequestRoute::Responses) => parsed.map_or_else(
+    match (provider.kind, route) {
+        (ProviderKind::Anthropic, RequestRoute::Messages)
+        | (ProviderKind::Codex, RequestRoute::Responses) => parsed.map_or_else(
             |_| {
                 vec![sse(
                     &Value::String(raw.to_string()),
@@ -1524,23 +1540,23 @@ fn transform_sse_event(
             },
             |data| vec![sse(&data, passthrough_event(event))],
         ),
-        (ProviderId::Anthropic, RequestRoute::Chat) => parsed.map_or_else(
+        (ProviderKind::Anthropic, RequestRoute::Chat) => parsed.map_or_else(
             |_| Vec::new(),
             |data| anthropic_sse_to_chat(event, &data, chat_state),
         ),
-        (ProviderId::Anthropic, RequestRoute::Responses) => parsed.map_or_else(
+        (ProviderKind::Anthropic, RequestRoute::Responses) => parsed.map_or_else(
             |_| Vec::new(),
             |data| anthropic_sse_to_responses(event, &data, responses_state, model),
         ),
-        (ProviderId::Codex, RequestRoute::Chat) => parsed.map_or_else(
+        (ProviderKind::Codex, RequestRoute::Chat) => parsed.map_or_else(
             |_| Vec::new(),
             |data| responses_sse_to_chat(event, &data, chat_state),
         ),
-        (ProviderId::Codex, RequestRoute::Messages) => parsed.map_or_else(
+        (ProviderKind::Codex, RequestRoute::Messages) => parsed.map_or_else(
             |_| Vec::new(),
             |data| responses_sse_to_anthropic(event, &data, anthropic_state),
         ),
-        (ProviderId::Opencode, _) => parsed.map_or_else(
+        (ProviderKind::Opencode, _) => parsed.map_or_else(
             |_| vec![sse(&Value::String(raw.to_string()), None)],
             |data| vec![sse(&data, None)],
         ),
@@ -1920,7 +1936,7 @@ mod tests {
             email: email.to_string(),
             expires_at: expires_at.to_string(),
             account_uuid: email.to_string(),
-            provider: ProviderId::Anthropic,
+            provider: ProviderId::anthropic(),
             id_token: None,
             last_refresh_at: None,
             plan_type: None,
@@ -2093,7 +2109,7 @@ mod tests {
             email: "opencode-abc12345".to_string(),
             expires_at: "9999-12-31T23:59:59Z".to_string(),
             account_uuid: String::new(),
-            provider: ProviderId::Opencode,
+            provider: ProviderId::opencode(),
             id_token: None,
             last_refresh_at: None,
             plan_type: None,
@@ -2107,9 +2123,9 @@ mod tests {
             body_limit: BodyLimit::Unlimited,
             upstream,
             account_managers: Arc::new(AccountManagers {
-                anthropic: tokio::sync::Mutex::new(manager(tmp, ProviderId::Anthropic)),
-                codex: tokio::sync::Mutex::new(manager(tmp, ProviderId::Codex)),
-                opencode: tokio::sync::Mutex::new(manager(tmp, ProviderId::Opencode)),
+                anthropic: tokio::sync::Mutex::new(manager(tmp, ProviderId::anthropic())),
+                codex: tokio::sync::Mutex::new(manager(tmp, ProviderId::codex())),
+                opencode: tokio::sync::Mutex::new(manager(tmp, ProviderId::opencode())),
             }),
             rate_limit_buckets: Arc::new(Mutex::new(std::collections::BTreeMap::<
                 String,
