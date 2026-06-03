@@ -116,6 +116,66 @@ pub fn load_all_tokens(auth_dir: &Path, provider: Option<&ProviderId>) -> Result
     Ok(tokens)
 }
 
+/// Move legacy flat-layout token files into per-id subdirectories. Returns the number of files
+/// moved. Safe to call on every startup — no-op once layout is current.
+///
+/// Mapping: `claude-<rest>.json` → `anthropic/<rest>.json`,
+/// `codex-<rest>.json` → `codex/<rest>.json`,
+/// `opencode-<rest>.json` → `opencode/<rest>.json`.
+///
+/// # Errors
+///
+/// Returns an error if a destination subdirectory cannot be created or a file cannot be moved.
+pub fn migrate_legacy_layout(auth_dir: &Path) -> Result<usize> {
+    if !auth_dir.exists() {
+        return Ok(0);
+    }
+    let mappings = [
+        ("claude-", "anthropic"),
+        ("codex-", "codex"),
+        ("opencode-", "opencode"),
+    ];
+    let mut moved = 0;
+    for entry in
+        fs::read_dir(auth_dir).with_context(|| format!("failed to read {}", auth_dir.display()))?
+    {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        if !path
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
+        {
+            continue;
+        }
+        let Some(filename) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        for (prefix, dest_dir) in mappings {
+            if let Some(rest) = filename.strip_prefix(prefix) {
+                let dest = auth_dir.join(dest_dir);
+                fs::create_dir_all(&dest)
+                    .with_context(|| format!("failed to create {}", dest.display()))?;
+                set_mode(&dest, 0o700)?;
+                let new_path = dest.join(rest);
+                fs::rename(&path, &new_path).with_context(|| {
+                    format!(
+                        "failed to move {} -> {}",
+                        path.display(),
+                        new_path.display()
+                    )
+                })?;
+                moved += 1;
+                tracing::info!(from = %path.display(), to = %new_path.display(), "migrated legacy token file");
+                break;
+            }
+        }
+    }
+    Ok(moved)
+}
+
 fn token_to_storage(token: &TokenData) -> StoredToken {
     StoredToken {
         access_token: token.access_token.clone(),
@@ -188,7 +248,9 @@ fn set_mode(_path: &Path, _mode: u32) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ProviderId, ProviderKind, TokenData, load_all_tokens, save_token};
+    use super::{
+        ProviderId, ProviderKind, TokenData, load_all_tokens, migrate_legacy_layout, save_token,
+    };
 
     fn token(provider: ProviderId, email: &str) -> TokenData {
         TokenData {
@@ -240,5 +302,33 @@ mod tests {
             load_all_tokens(dir.path(), Some(&ProviderId::anthropic())).expect("load anthropic");
         assert_eq!(just_anthropic.len(), 1);
         assert_eq!(just_anthropic[0].provider.kind, ProviderKind::Anthropic);
+    }
+
+    #[test]
+    fn migrate_legacy_layout_moves_files_into_subdirs_idempotently() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let auth = dir.path();
+        std::fs::create_dir_all(auth).unwrap();
+        std::fs::write(
+            auth.join("claude-alice_at_x.com.json"),
+            r#"{"access_token":"a","refresh_token":"r","expired":"2099-01-01T00:00:00Z"}"#,
+        )
+        .unwrap();
+        std::fs::write(auth.join("codex-bob_at_y.com.json"), r#"{"access_token":"a","refresh_token":"r","expired":"2099-01-01T00:00:00Z","type":"codex"}"#).unwrap();
+        std::fs::write(auth.join("opencode-deadbeef.json"), r#"{"access_token":"a","refresh_token":"","expired":"9999-12-31T23:59:59Z","type":"opencode"}"#).unwrap();
+        std::fs::write(auth.join("unrelated.txt"), "ignore me").unwrap();
+
+        let moved = migrate_legacy_layout(auth).expect("migrate");
+        assert_eq!(moved, 3);
+
+        assert!(auth.join("anthropic/alice_at_x.com.json").exists());
+        assert!(auth.join("codex/bob_at_y.com.json").exists());
+        assert!(auth.join("opencode/deadbeef.json").exists());
+        assert!(!auth.join("claude-alice_at_x.com.json").exists());
+        assert!(auth.join("unrelated.txt").exists());
+
+        // Idempotent: second call moves nothing.
+        let again = migrate_legacy_layout(auth).expect("migrate again");
+        assert_eq!(again, 0);
     }
 }

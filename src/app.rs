@@ -355,6 +355,9 @@ pub fn create_app(config: Config) -> Router {
 }
 
 pub fn create_app_with_upstream(config: Config, upstream: Arc<dyn UpstreamClient>) -> Router {
+    if let Err(error) = crate::tokens::migrate_legacy_layout(&config.auth_dir) {
+        tracing::warn!(?error, "legacy token layout migration failed");
+    }
     let registry = build_registry(&config.auth_dir);
     let body_limit = parse_body_limit(&config.body_limit);
     let account_managers = build_account_managers(&config);
