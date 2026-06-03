@@ -168,7 +168,7 @@ fn token_storage_round_trips_provider_files() {
     assert_eq!(
         files,
         [
-            "claude-alice@example.com.json",
+            "anthropic-alice@example.com.json",
             "codex-bob@example.com.json",
             "opencode-opencode-acct.json"
         ]

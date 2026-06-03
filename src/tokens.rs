@@ -34,7 +34,7 @@ pub fn save_token(auth_dir: &Path, token: &TokenData) -> Result<PathBuf> {
 
     let filename = format!(
         "{}-{}.json",
-        legacy_filename_prefix(token.provider.kind),
+        token.provider.storage_dir(),
         sanitize_email(&token.email)
     );
     let path = auth_dir.join(filename);
@@ -57,7 +57,7 @@ pub fn load_all_tokens(auth_dir: &Path, provider: Option<&ProviderId>) -> Result
         return Ok(Vec::new());
     }
 
-    let prefix = provider.map(|provider| legacy_filename_prefix(provider.kind));
+    let prefix = provider.map(|provider| provider.storage_dir().to_string());
     let mut paths = fs::read_dir(auth_dir)
         .with_context(|| format!("failed to read {}", auth_dir.display()))?
         .collect::<Result<Vec<_>, _>>()
@@ -76,11 +76,12 @@ pub fn load_all_tokens(auth_dir: &Path, provider: Option<&ProviderId>) -> Result
         let Some(filename) = path.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
-        if let Some(prefix) = prefix {
+        if let Some(prefix) = &prefix {
             if !filename.starts_with(&format!("{prefix}-")) {
                 continue;
             }
-        } else if !(filename.starts_with("claude-")
+        } else if !(filename.starts_with("anthropic-")
+            || filename.starts_with("claude-")
             || filename.starts_with("codex-")
             || filename.starts_with("opencode-"))
         {
@@ -94,7 +95,7 @@ pub fn load_all_tokens(auth_dir: &Path, provider: Option<&ProviderId>) -> Result
             continue;
         };
         let token = storage_to_token(stored);
-        if provider.is_none_or(|provider| token.provider == *provider) {
+        if provider.is_none_or(|provider| token.provider.kind == provider.kind) {
             tokens.push(token);
         }
     }
@@ -106,7 +107,11 @@ fn token_to_storage(token: &TokenData) -> StoredToken {
         access_token: token.access_token.clone(),
         refresh_token: token.refresh_token.clone(),
         email: Some(token.email.clone()),
-        token_type: Some(legacy_filename_prefix(token.provider.kind).to_string()),
+        token_type: Some(match token.provider.kind {
+            ProviderKind::Anthropic => "claude".to_string(),
+            ProviderKind::Codex => "codex".to_string(),
+            ProviderKind::Opencode => "opencode".to_string(),
+        }),
         expired: token.expires_at.clone(),
         account_uuid: Some(token.account_uuid.clone()),
         id_token: token.id_token.clone(),
@@ -138,18 +143,6 @@ fn storage_to_token(stored: StoredToken) -> TokenData {
     }
 }
 
-/// Legacy filename prefix for the v0.1 flat layout (`claude-…`, `codex-…`, `opencode-…`).
-///
-/// Anthropic deliberately maps to "claude" here to keep on-disk filenames stable; Task 3 of the
-/// multi-provider refactor switches the layout to `<storage_dir>/...` and retires this helper.
-const fn legacy_filename_prefix(kind: ProviderKind) -> &'static str {
-    match kind {
-        ProviderKind::Anthropic => "claude",
-        ProviderKind::Codex => "codex",
-        ProviderKind::Opencode => "opencode",
-    }
-}
-
 fn plan_type_from_id_token(id_token: Option<&str>) -> Option<String> {
     let claims = decode_jwt_payload(id_token?).ok()?;
     let auth = claims.get("https://api.openai.com/auth");
@@ -174,4 +167,35 @@ fn set_mode(path: &Path, mode: u32) -> Result<()> {
 #[cfg(not(unix))]
 fn set_mode(_path: &Path, _mode: u32) -> Result<()> {
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ProviderId, TokenData, save_token};
+
+    fn token(provider: ProviderId, email: &str) -> TokenData {
+        TokenData {
+            access_token: "a".into(),
+            refresh_token: "r".into(),
+            email: email.into(),
+            expires_at: "2099-01-01T00:00:00Z".into(),
+            account_uuid: "u".into(),
+            provider,
+            id_token: None,
+            last_refresh_at: None,
+            plan_type: None,
+        }
+    }
+
+    #[test]
+    fn save_token_uses_storage_dir_as_filename_prefix() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path =
+            save_token(dir.path(), &token(ProviderId::anthropic(), "alice@x.com")).expect("save");
+        let filename = path.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(
+            filename.starts_with("anthropic-"),
+            "filename was {filename}"
+        );
+    }
 }
