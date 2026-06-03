@@ -159,7 +159,7 @@ mod tests {
     }
 
     #[test]
-    fn provider_kind_canonical_ids_are_kebab_case() {
+    fn provider_kind_canonical_ids_match_serde_repr() {
         assert_eq!(ProviderKind::Anthropic.canonical_id(), "anthropic");
         assert_eq!(ProviderKind::Codex.canonical_id(), "codex");
         assert_eq!(ProviderKind::Opencode.canonical_id(), "opencode");
@@ -171,11 +171,26 @@ mod tests {
             "anthropic".parse::<ProviderKind>(),
             Ok(ProviderKind::Anthropic)
         );
+        assert_eq!(
+            "claude".parse::<ProviderKind>(),
+            Ok(ProviderKind::Anthropic)
+        );
         assert_eq!("codex".parse::<ProviderKind>(), Ok(ProviderKind::Codex));
         assert_eq!(
             "opencode".parse::<ProviderKind>(),
             Ok(ProviderKind::Opencode)
         );
         assert!("nope".parse::<ProviderKind>().is_err());
+    }
+
+    #[test]
+    fn provider_kind_canonical_id_round_trips_through_from_str() {
+        for kind in [
+            ProviderKind::Anthropic,
+            ProviderKind::Codex,
+            ProviderKind::Opencode,
+        ] {
+            assert_eq!(kind.canonical_id().parse::<ProviderKind>(), Ok(kind));
+        }
     }
 }
