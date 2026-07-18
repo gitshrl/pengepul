@@ -98,8 +98,6 @@ fn system_prompt_strips_bot_sections_and_renames_persona() {
     assert!(!sys.contains("## Group Chats"), "Group Chats must be stripped");
     assert!(!sys.contains("Know When to Speak"), "chat-behavior must be stripped");
     assert!(!sys.contains("Heartbeats - Be Proactive"), "heartbeats must be stripped");
-    // persona name replaced
-    assert!(!sys.contains("Lena"), "persona name Lena must be replaced");
     // kept sections survive
     assert!(sys.contains("## Skills"), "Skills section must be kept");
     assert!(sys.contains("## Memory"), "Memory section must be kept");

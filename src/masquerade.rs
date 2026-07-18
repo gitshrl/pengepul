@@ -24,21 +24,26 @@ const CC_TOOL_POOL: &[&str] = &[
     "Test", "Build", "Run", "Watch", "Inspect", "Trace", "Profile", "Debug", "Explain",
 ];
 
-/// System-prompt headings (with their bodies and sub-sections) that trip the
-/// classifier as chat-bot identity. Removed wholesale; a heading of level L takes
-/// everything up to the next heading of level <= L.
-const BOT_SECTION_HEADINGS: &[&str] = &[
-    "## Reply Tags",
-    "## Messaging",
-    "## Group Chats",
-    "## Heartbeats",
-    "## 💓 Heartbeats - Be Proactive!",
-    "## Silent Replies",
-    "### message tool",
+/// Case-insensitive keywords that mark a system-prompt heading as chat-bot
+/// identity. Matched against the heading text (not the body) so wording/emoji
+/// variants across openclaw versions still hit; a matched heading of level L
+/// removes everything up to the next heading of level <= L, so sub-sections are
+/// swallowed with their parent.
+const BOT_SECTION_KEYWORDS: &[&str] = &[
+    "messaging",
+    "message tool",
+    "heartbeat",
+    "group chat",
+    "reply tag",
+    "silent repl",
+    "know when to speak",
+    "react like a human",
 ];
 
-const PERSONA_NAME: &str = "Lena";
-const PERSONA_REPLACEMENT: &str = "the assistant";
+fn is_bot_heading(line: &str) -> bool {
+    let lower = line.to_lowercase();
+    BOT_SECTION_KEYWORDS.iter().any(|kw| lower.contains(kw))
+}
 
 fn heading_level(line: &str) -> Option<usize> {
     if !line.starts_with('#') {
@@ -97,7 +102,7 @@ fn sanitize_system_text(text: &str, tool_map: &BTreeMap<String, String>) -> Stri
             {
                 skip_until_level = None;
             }
-            if skip_until_level.is_none() && BOT_SECTION_HEADINGS.contains(&line.trim()) {
+            if skip_until_level.is_none() && is_bot_heading(line) {
                 skip_until_level = Some(level);
             }
         }
@@ -114,7 +119,7 @@ fn sanitize_system_text(text: &str, tool_map: &BTreeMap<String, String>) -> Stri
         out = out.replace(&format!("- {orig}:"), &format!("- {pseudo}:"));
     }
 
-    out.replace(PERSONA_NAME, PERSONA_REPLACEMENT)
+    out
 }
 
 fn remap_tool_use_names(messages: &mut Value, tool_map: &BTreeMap<String, String>) {
