@@ -44,6 +44,11 @@ const BOT_SECTION_KEYWORDS: &[&str] = &[
     "silent repl",
     "know when to speak",
     "react like a human",
+    "reactions",
+    "authorized senders",
+    "allowlisted senders",
+    "inbound context",
+    "trusted metadata",
 ];
 
 fn is_bot_heading(line: &str) -> bool {
