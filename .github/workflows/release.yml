@@ -99,6 +99,12 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # Full history, so the previous tag can be found for the changelog link.
+      - name: checkout
+        uses: actions/checkout@v6.0.2
+        with:
+          fetch-depth: 0
+
       - name: download release assets
         uses: actions/download-artifact@v8.0.1
         with:
@@ -112,7 +118,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          previous="$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)"
+          if [ -n "${previous}" ]; then
+            link="https://github.com/${GITHUB_REPOSITORY}/compare/${previous}...${GITHUB_REF_NAME}"
+          else
+            link="https://github.com/${GITHUB_REPOSITORY}/commits/${GITHUB_REF_NAME}"
+          fi
+          notes="**Full Changelog**: ${link}"
           if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --notes "${notes}"
             gh release upload "$GITHUB_REF_NAME" \
               --repo "$GITHUB_REPOSITORY" \
               --clobber \
@@ -120,7 +134,7 @@ jobs:
           else
             gh release create "$GITHUB_REF_NAME" \
               --repo "$GITHUB_REPOSITORY" \
-              --generate-notes \
+              --notes "${notes}" \
               --verify-tag \
               *.tar.gz checksums.txt
           fi
