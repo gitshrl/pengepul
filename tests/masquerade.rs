@@ -114,8 +114,16 @@ fn system_prompt_strips_bot_sections_and_keeps_coding_sections() {
 }
 
 #[test]
-fn masquerade_leaves_persona_name_untouched() {
+fn masquerade_leaves_persona_line_untouched() {
     let body = fixture();
+    let persona = body["system"][0]["text"]
+        .as_str()
+        .unwrap()
+        .lines()
+        .next()
+        .unwrap()
+        .to_string();
+
     let (out, _rev) = masquerade_request(&body);
     let sys: String = out["system"]
         .as_array()
@@ -128,8 +136,8 @@ fn masquerade_leaves_persona_name_untouched() {
     // The persona is an operator workspace value, not an openclaw constant, and
     // does not move the classifier. Scrubbing it was tried and dropped.
     assert!(
-        sys.contains("Lena"),
-        "persona name must reach the upstream unchanged"
+        sys.contains(&persona),
+        "persona line must reach the upstream unchanged: {persona}"
     );
 }
 

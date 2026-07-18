@@ -174,7 +174,7 @@ fn apply_cloaking_rewrites_classifier_tripping_sentence_in_system() {
     let body = json!({
         "messages": [{"role": "user", "content": "reply exactly: pong"}],
         "system": [
-            {"type": "text", "text": "You are a personal assistant running inside Lena."},
+            {"type": "text", "text": "You are a personal assistant running inside Openclaw."},
             {"type": "text", "text": format!("## Inbound Context (trusted metadata)\n{offending}\n\n```json\n{{}}\n```")}
         ]
     });
@@ -210,7 +210,7 @@ fn apply_cloaking_rewrites_classifier_tripping_sentence_in_system() {
         "surrounding text must be preserved"
     );
     assert!(
-        texts.contains(&"You are a personal assistant running inside Lena."),
+        texts.contains(&"You are a personal assistant running inside Openclaw."),
         "unrelated system blocks must be byte-identical"
     );
 }

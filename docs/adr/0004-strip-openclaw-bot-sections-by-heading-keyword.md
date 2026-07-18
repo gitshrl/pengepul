@@ -55,7 +55,7 @@ is never masqueraded.
   warning. The cost of a false positive is a lost instruction rather than a
   rejected request.
 - The persona name reaches Anthropic in the outbound body. That is intended;
-  `masquerade_leaves_persona_name_untouched` pins it so the behaviour cannot be
+  `masquerade_leaves_persona_line_untouched` pins it so the behaviour cannot be
   reverted by accident.
 - The unit tests prove the transform is self-consistent, never that the
   classifier still accepts its output. Re-validating that needs live traffic:
