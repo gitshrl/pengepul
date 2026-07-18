@@ -146,6 +146,22 @@ pub fn anthropic_headers(
     headers
 }
 
+// Log-only: message content is never rewritten (quotes, tool_results, and signed
+// thinking blocks must stay byte-identical), but a quoted copy of the sentence in
+// conversation history may still trip the classifier — surface it for diagnosis.
+#[must_use]
+pub fn detect_classifier_tripping_in_messages(body: &Value) -> bool {
+    fn contains_sentence(value: &Value) -> bool {
+        match value {
+            Value::String(text) => text.contains(CLASSIFIER_TRIPPING_TEXT),
+            Value::Array(values) => values.iter().any(contains_sentence),
+            Value::Object(map) => map.values().any(contains_sentence),
+            _ => false,
+        }
+    }
+    body.get("messages").is_some_and(contains_sentence)
+}
+
 #[must_use]
 pub fn apply_cloaking(
     body: &Value,
@@ -153,6 +169,11 @@ pub fn apply_cloaking(
     account: &AvailableAccount,
     config: &Config,
 ) -> Value {
+    if detect_classifier_tripping_in_messages(body) {
+        tracing::warn!(
+            "classifier-tripping sentence found in messages content; passing through unmodified"
+        );
+    }
     let mut next_body = body.clone();
     if !next_body.is_object() {
         next_body = json!({});
