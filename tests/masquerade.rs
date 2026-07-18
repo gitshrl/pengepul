@@ -80,7 +80,7 @@ fn assistant_tool_use_names_are_mapped_in_request_history() {
 }
 
 #[test]
-fn system_prompt_strips_bot_sections_and_renames_persona() {
+fn system_prompt_strips_bot_sections_and_keeps_coding_sections() {
     let body = fixture();
     let (out, _rev) = masquerade_request(&body);
     let sys: String = out["system"]
@@ -111,6 +111,26 @@ fn system_prompt_strips_bot_sections_and_renames_persona() {
     // kept sections survive
     assert!(sys.contains("## Skills"), "Skills section must be kept");
     assert!(sys.contains("## Memory"), "Memory section must be kept");
+}
+
+#[test]
+fn masquerade_leaves_persona_name_untouched() {
+    let body = fixture();
+    let (out, _rev) = masquerade_request(&body);
+    let sys: String = out["system"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|b| b["text"].as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // The persona is an operator workspace value, not an openclaw constant, and
+    // does not move the classifier. Scrubbing it was tried and dropped.
+    assert!(
+        sys.contains("Lena"),
+        "persona name must reach the upstream unchanged"
+    );
 }
 
 #[test]
