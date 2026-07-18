@@ -203,9 +203,10 @@ fn apply_cloaking_rewrites_classifier_tripping_sentence_in_system() {
         "safe replacement must be present"
     );
     assert!(
-        texts.iter().any(|text| text
-            .contains("## Inbound Context (trusted metadata)\n")
-            && text.contains("\n\n```json\n{}\n```")),
+        texts.iter().any(
+            |text| text.contains("## Inbound Context (trusted metadata)\n")
+                && text.contains("\n\n```json\n{}\n```")
+        ),
         "surrounding text must be preserved"
     );
     assert!(

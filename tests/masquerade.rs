@@ -76,9 +76,7 @@ fn assistant_tool_use_names_are_mapped_in_request_history() {
     // and the masked name reverses back to exec
     assert_eq!(restore_tool_name(tu_name, &rev), "exec");
     // tool_result (references id, not name) is untouched
-    assert_eq!(
-        out["messages"][2]["content"][0]["tool_use_id"], "tu_1"
-    );
+    assert_eq!(out["messages"][2]["content"][0]["tool_use_id"], "tu_1");
 }
 
 #[test]
@@ -94,10 +92,22 @@ fn system_prompt_strips_bot_sections_and_renames_persona() {
         .join("\n");
 
     // bot sections gone
-    assert!(!sys.contains("## Messaging"), "Messaging section must be stripped");
-    assert!(!sys.contains("## Group Chats"), "Group Chats must be stripped");
-    assert!(!sys.contains("Know When to Speak"), "chat-behavior must be stripped");
-    assert!(!sys.contains("Heartbeats - Be Proactive"), "heartbeats must be stripped");
+    assert!(
+        !sys.contains("## Messaging"),
+        "Messaging section must be stripped"
+    );
+    assert!(
+        !sys.contains("## Group Chats"),
+        "Group Chats must be stripped"
+    );
+    assert!(
+        !sys.contains("Know When to Speak"),
+        "chat-behavior must be stripped"
+    );
+    assert!(
+        !sys.contains("Heartbeats - Be Proactive"),
+        "heartbeats must be stripped"
+    );
     // kept sections survive
     assert!(sys.contains("## Skills"), "Skills section must be kept");
     assert!(sys.contains("## Memory"), "Memory section must be kept");
@@ -129,6 +139,9 @@ fn restores_tool_use_names_in_response_body_and_sse_event() {
 
     // unknown / empty map is a no-op
     let mut untouched = json!({"content_block": {"type": "tool_use", "name": "Read"}});
-    pengepul::masquerade::restore_tool_use_names(&mut untouched, &std::collections::BTreeMap::new());
+    pengepul::masquerade::restore_tool_use_names(
+        &mut untouched,
+        &std::collections::BTreeMap::new(),
+    );
     assert_eq!(untouched["content_block"]["name"], "Read");
 }

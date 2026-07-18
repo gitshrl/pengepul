@@ -789,7 +789,14 @@ async fn route_codex_request(
                 let accounting =
                     stream_accounting(state, account.provider.clone(), account, response.status)
                         .await;
-                sse_upstream_response(response, account.provider.clone(), route, model, accounting, Arc::new(BTreeMap::new()))
+                sse_upstream_response(
+                    response,
+                    account.provider.clone(),
+                    route,
+                    model,
+                    accounting,
+                    Arc::new(BTreeMap::new()),
+                )
             }
             Err(error) => {
                 upstream_failure_response(state, account.provider.clone(), account, &error).await
@@ -919,7 +926,14 @@ async fn route_opencode_request(
                 let accounting =
                     stream_accounting(state, account.provider.clone(), account, response.status)
                         .await;
-                sse_upstream_response(response, account.provider.clone(), route, model, accounting, Arc::new(BTreeMap::new()))
+                sse_upstream_response(
+                    response,
+                    account.provider.clone(),
+                    route,
+                    model,
+                    accounting,
+                    Arc::new(BTreeMap::new()),
+                )
             }
             Err(error) => {
                 upstream_failure_response(state, account.provider.clone(), account, &error).await
