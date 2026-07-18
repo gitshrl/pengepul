@@ -29,7 +29,6 @@ struct FakeRuntime {
     calls: Vec<String>,
     install_request: Option<ServiceInstallRequest>,
     login_provider: Option<ProviderId>,
-    login_manual: Option<bool>,
     login_key: Option<String>,
 }
 
@@ -111,12 +110,10 @@ impl CliRuntime for FakeRuntime {
         &mut self,
         _config: &Config,
         provider: ProviderId,
-        manual: bool,
         key: Option<&str>,
     ) -> Result<String> {
         let email = format!("{provider}@example.com");
         self.login_provider = Some(provider);
-        self.login_manual = Some(manual);
         self.login_key = key.map(ToOwned::to_owned);
         Ok(email)
     }
@@ -150,7 +147,6 @@ fn top_level_help_uses_subcommands() {
 
     assert_eq!(outcome.code, 0);
     assert!(!outcome.stdout.contains("--login"));
-    assert!(!outcome.stdout.contains("--manual"));
     assert!(!outcome.stdout.contains("--host HOST"));
     assert!(!outcome.stdout.contains("--port PORT"));
     assert!(outcome.stdout.contains("login"));
@@ -324,19 +320,14 @@ fn service_control_subcommands_delegate_to_runtime() {
 }
 
 #[test]
-fn login_delegates_provider_and_manual_mode() {
+fn login_delegates_provider() {
     let tmp = tempdir().expect("tempdir");
     write_config(tmp.path(), "127.0.0.1", 8317);
     let mut runtime = FakeRuntime::default();
 
-    let outcome = run(
-        &["login", "--provider", "codex", "--manual"],
-        tmp.path(),
-        &mut runtime,
-    );
+    let outcome = run(&["login", "--provider", "codex"], tmp.path(), &mut runtime);
 
     assert_eq!(runtime.login_provider, Some(ProviderId::codex()));
-    assert_eq!(runtime.login_manual, Some(true));
     assert_eq!(
         outcome.stdout.trim(),
         "saved codex account token for codex@example.com"
@@ -386,29 +377,5 @@ fn login_opencode_passes_key() {
     assert_eq!(
         outcome.stdout.trim(),
         "saved opencode account token for opencode@example.com"
-    );
-}
-
-#[test]
-fn login_opencode_rejects_manual() {
-    let tmp = tempdir().expect("tempdir");
-    write_config(tmp.path(), "127.0.0.1", 8317);
-    let mut runtime = FakeRuntime::default();
-
-    let error = run_with_env(
-        &["login", "--provider", "opencode", "--manual"],
-        tmp.path(),
-        tmp.path(),
-        &mut runtime,
-    )
-    .expect_err("--manual with opencode should error");
-
-    assert!(
-        error.to_string().contains("manual"),
-        "unexpected error: {error}"
-    );
-    assert_eq!(
-        runtime.login_provider, None,
-        "runtime.login must not be called when args are rejected"
     );
 }

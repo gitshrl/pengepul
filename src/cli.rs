@@ -7,7 +7,7 @@ use serde_json::Value;
 
 use crate::config::{Config, load_config, selected_config_path};
 use crate::providers::{ProviderRegistry, build_registry};
-use crate::types::{ProviderId, ProviderKind};
+use crate::types::ProviderId;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunOutcome {
@@ -108,13 +108,8 @@ pub trait CliRuntime {
     /// # Errors
     ///
     /// Returns an error if OAuth authorization, token exchange, or token persistence fails.
-    fn login(
-        &mut self,
-        config: &Config,
-        provider: ProviderId,
-        manual: bool,
-        key: Option<&str>,
-    ) -> Result<String>;
+    fn login(&mut self, config: &Config, provider: ProviderId, key: Option<&str>)
+    -> Result<String>;
 }
 
 #[derive(Debug, Parser)]
@@ -144,8 +139,6 @@ enum Command {
         command_config: Option<PathBuf>,
         #[arg(long, default_value = "anthropic", value_parser = ["anthropic", "codex", "opencode"])]
         provider: String,
-        #[arg(long)]
-        manual: bool,
         /// opencode API key (defaults to importing it from opencode's auth.json)
         #[arg(long)]
         key: Option<String>,
@@ -303,13 +296,11 @@ pub fn run_with_env(
         Some(Command::Login {
             command_config,
             provider,
-            manual,
             key,
         }) => {
             login(
                 command_config.as_deref().or(parsed_args.config.as_deref()),
                 &provider,
-                manual,
                 key.as_deref(),
                 home,
                 cwd,
@@ -464,7 +455,6 @@ fn service_command(
 fn login(
     config_path: Option<&Path>,
     provider: &str,
-    manual: bool,
     key: Option<&str>,
     home: &Path,
     cwd: &Path,
@@ -473,11 +463,8 @@ fn login(
 ) -> Result<()> {
     let config = load_config(config_path, Some(home), cwd)?;
     let provider = provider.parse::<ProviderId>().map_err(anyhow::Error::msg)?;
-    if provider.kind == ProviderKind::Opencode && manual {
-        bail!("--manual is not supported for opencode (it uses a static API key, not OAuth)");
-    }
     let provider_label = provider.clone();
-    let email = runtime.login(&config, provider, manual, key)?;
+    let email = runtime.login(&config, provider, key)?;
     output.line(&format!("saved {provider_label} account token for {email}"));
     Ok(())
 }

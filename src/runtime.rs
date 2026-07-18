@@ -128,7 +128,6 @@ impl CliRuntime for RealRuntime {
         &mut self,
         config: &Config,
         provider: ProviderId,
-        manual: bool,
         key: Option<&str>,
     ) -> Result<String> {
         if provider.kind == ProviderKind::Opencode {
@@ -138,15 +137,9 @@ impl CliRuntime for RealRuntime {
         let pkce = generate_pkce_codes();
         let auth_url = auth_url(&provider, &state, &pkce);
         println!("\nOpen this URL to authorize {provider}:\n\n{auth_url}\n");
-        if !manual {
-            open_browser(&auth_url);
-        }
-        let callback = if manual {
-            manual_callback()?
-        } else {
-            let (port, path) = callback_endpoint(&provider)?;
-            wait_for_callback(port, path, Duration::from_mins(5))?
-        };
+        open_browser(&auth_url);
+        let (port, path) = callback_endpoint(&provider)?;
+        let callback = wait_for_callback(port, path, Duration::from_mins(5))?;
         let token = self.runtime.block_on(async {
             match provider.kind {
                 ProviderKind::Anthropic => {
@@ -331,30 +324,6 @@ fn opencode_key_from_auth_json(value: &Value) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-fn manual_callback() -> Result<CallbackResult> {
-    let value = prompt_line("Paste the full callback URL or authorization code: ")?;
-    if value.starts_with("http://") || value.starts_with("https://") {
-        return callback_from_url(&value);
-    }
-    let state = prompt_line("Paste returned state: ")?;
-    if value.is_empty() || state.is_empty() {
-        bail!("manual login requires code and state");
-    }
-    Ok(CallbackResult { code: value, state })
-}
-
-fn prompt_line(prompt: &str) -> Result<String> {
-    print!("{prompt}");
-    std::io::stdout()
-        .flush()
-        .context("failed to flush stdout")?;
-    let mut value = String::new();
-    std::io::stdin()
-        .read_line(&mut value)
-        .context("failed to read stdin")?;
-    Ok(value.trim().to_string())
-}
-
 fn wait_for_callback(port: u16, callback_path: &str, timeout: Duration) -> Result<CallbackResult> {
     let listener = std::net::TcpListener::bind(("127.0.0.1", port))
         .with_context(|| format!("failed to listen on 127.0.0.1:{port}"))?;
@@ -414,16 +383,6 @@ fn handle_callback_stream(
         "text/html",
         b"<!doctype html><html><body><h1>Login successful</h1><p>You can close this tab and return to the terminal.</p></body></html>",
     )?;
-    Ok(CallbackResult { code, state })
-}
-
-fn callback_from_url(value: &str) -> Result<CallbackResult> {
-    let parsed = url::Url::parse(value).context("callback URL is invalid")?;
-    let code = query_value(&parsed, "code");
-    let state = query_value(&parsed, "state");
-    let (Some(code), Some(state)) = (code, state) else {
-        bail!("callback URL is missing code or state");
-    };
     Ok(CallbackResult { code, state })
 }
 
