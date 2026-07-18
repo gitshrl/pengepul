@@ -178,11 +178,3 @@ back empty with `finish_reason: length`.
 
 `serve` logs through `tracing` at `info`. Set `debug: verbose` for per-request
 detail; `RUST_LOG` overrides both.
-
-## Development
-
-```sh
-cargo fmt --check
-cargo test --locked
-cargo clippy --locked --all-targets --all-features -- -D warnings
-```
