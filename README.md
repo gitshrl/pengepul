@@ -25,7 +25,7 @@ cargo install --git https://github.com/gitshrl/pengepul.git --locked
 `anthropic` and `codex` use OAuth; `opencode` uses a static API key.
 
 ```sh
-pengepul login                                  # defaults to anthropic
+pengepul login # defaults to anthropic
 pengepul login --provider codex
 pengepul login --provider opencode --key sk-... # or omit --key to import it
 ```
@@ -38,8 +38,8 @@ OAuth completes on a localhost callback, so logging in on a remote host needs th
 port forwarded first:
 
 ```sh
-ssh -L 54545:localhost:54545 user@host   # anthropic
-ssh -L 1455:localhost:1455 user@host     # codex
+ssh -L 54545:localhost:54545 user@host # anthropic
+ssh -L 1455:localhost:1455 user@host # codex
 ```
 
 Credentials live under `auth-dir` (`~/.pengepul`), one directory per provider,
@@ -49,7 +49,7 @@ Credentials live under `auth-dir` (`~/.pengepul`), one directory per provider,
 ## Run
 
 ```sh
-pengepul                              # same as `pengepul serve`
+pengepul # same as `pengepul serve`
 pengepul serve --host 127.0.0.1 --port 8318
 ```
 
