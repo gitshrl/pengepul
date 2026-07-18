@@ -2,7 +2,11 @@ name: ci
 
 on:
   pull_request:
+  # Tags are covered by the release workflow, which runs the same checks before
+  # it builds. Without this they run twice on every release.
   push:
+    tags-ignore:
+      - "**"
 
 permissions:
   contents: read
