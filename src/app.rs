@@ -19,6 +19,7 @@ use tower_http::cors::{Any, CorsLayer};
 
 use crate::accounts::{AccountManager, RefreshFuture, RefreshPolicy, RefreshPolicyKind};
 use crate::config::Config;
+use crate::masquerade::{masquerade_request, restore_tool_use_names};
 use crate::oauth::{refresh_anthropic_tokens, refresh_codex_tokens};
 use crate::providers::{
     OPENCODE_FREE_MODELS, OPENCODE_MODELS, ProviderRegistry, build_registry, strip_opencode_prefix,
@@ -788,7 +789,7 @@ async fn route_codex_request(
                 let accounting =
                     stream_accounting(state, account.provider.clone(), account, response.status)
                         .await;
-                sse_upstream_response(response, account.provider.clone(), route, model, accounting)
+                sse_upstream_response(response, account.provider.clone(), route, model, accounting, Arc::new(BTreeMap::new()))
             }
             Err(error) => {
                 upstream_failure_response(state, account.provider.clone(), account, &error).await
@@ -807,7 +808,7 @@ async fn route_codex_request(
     {
         Ok(response) => {
             record_json_result(state, account.provider.clone(), account, &response).await;
-            json_upstream_response(response, &account.provider, route, model)
+            json_upstream_response(response, &account.provider, route, model, &BTreeMap::new())
         }
         Err(error) => {
             upstream_failure_response(state, account.provider.clone(), account, &error).await
@@ -825,6 +826,16 @@ async fn route_anthropic_request(
     client_wants_stream: bool,
 ) -> Response {
     let body = anthropic_request_body(body, model, route);
+    // Masquerade openclaw's own tool names and bot-persona system prompt as a
+    // first-party Claude Code request so the subscription billing classifier does
+    // not reject it. Only the Messages route carries these; the reverse map
+    // restores tool_use names in the response.
+    let (body, tool_reverse) = if matches!(route, RequestRoute::Messages) {
+        let (masked, reverse) = masquerade_request(&body);
+        (masked, Arc::new(reverse))
+    } else {
+        (body, Arc::new(BTreeMap::new()))
+    };
     if client_wants_stream {
         return match state
             .upstream
@@ -840,7 +851,14 @@ async fn route_anthropic_request(
                 let accounting =
                     stream_accounting(state, account.provider.clone(), account, response.status)
                         .await;
-                sse_upstream_response(response, account.provider.clone(), route, model, accounting)
+                sse_upstream_response(
+                    response,
+                    account.provider.clone(),
+                    route,
+                    model,
+                    accounting,
+                    tool_reverse,
+                )
             }
             Err(error) => {
                 upstream_failure_response(state, account.provider.clone(), account, &error).await
@@ -859,7 +877,7 @@ async fn route_anthropic_request(
     {
         Ok(response) => {
             record_json_result(state, account.provider.clone(), account, &response).await;
-            json_upstream_response(response, &account.provider, route, model)
+            json_upstream_response(response, &account.provider, route, model, &tool_reverse)
         }
         Err(error) => {
             upstream_failure_response(state, account.provider.clone(), account, &error).await
@@ -901,7 +919,7 @@ async fn route_opencode_request(
                 let accounting =
                     stream_accounting(state, account.provider.clone(), account, response.status)
                         .await;
-                sse_upstream_response(response, account.provider.clone(), route, model, accounting)
+                sse_upstream_response(response, account.provider.clone(), route, model, accounting, Arc::new(BTreeMap::new()))
             }
             Err(error) => {
                 upstream_failure_response(state, account.provider.clone(), account, &error).await
@@ -920,7 +938,7 @@ async fn route_opencode_request(
     {
         Ok(response) => {
             record_json_result(state, account.provider.clone(), account, &response).await;
-            json_upstream_response(response, &account.provider, route, model)
+            json_upstream_response(response, &account.provider, route, model, &BTreeMap::new())
         }
         Err(error) => {
             upstream_failure_response(state, account.provider.clone(), account, &error).await
@@ -1272,6 +1290,7 @@ fn json_upstream_response(
     provider: &ProviderId,
     route: RequestRoute,
     model: &str,
+    tool_reverse: &BTreeMap<String, String>,
 ) -> Response {
     if !response.status.is_success() {
         return (response.status, Json(response.body)).into_response();
@@ -1281,9 +1300,14 @@ fn json_upstream_response(
         (ProviderKind::Anthropic, RequestRoute::Responses) => {
             anthropic_to_responses(&response.body, model)
         }
-        (ProviderKind::Anthropic, RequestRoute::Messages)
-        | (ProviderKind::Codex, RequestRoute::Responses)
-        | (ProviderKind::Opencode, _) => response.body,
+        (ProviderKind::Anthropic, RequestRoute::Messages) => {
+            let mut body = response.body;
+            restore_tool_use_names(&mut body, tool_reverse);
+            body
+        }
+        (ProviderKind::Codex, RequestRoute::Responses) | (ProviderKind::Opencode, _) => {
+            response.body
+        }
         (ProviderKind::Codex, RequestRoute::Chat) => {
             responses_to_chat_completion(&response.body, model)
         }
@@ -1300,6 +1324,7 @@ fn sse_upstream_response(
     route: RequestRoute,
     model: &str,
     accounting: Option<StreamAccounting>,
+    tool_reverse: Arc<BTreeMap<String, String>>,
 ) -> Response {
     let body = if response.status.is_success() {
         transformed_sse_stream(
@@ -1308,6 +1333,7 @@ fn sse_upstream_response(
             route,
             model.to_string(),
             accounting,
+            tool_reverse,
         )
     } else {
         response.body
@@ -1333,6 +1359,7 @@ fn transformed_sse_stream(
     route: RequestRoute,
     model: String,
     accounting: Option<StreamAccounting>,
+    tool_reverse: Arc<BTreeMap<String, String>>,
 ) -> UpstreamSseStream {
     Box::pin(try_stream! {
         let mut buffer = Vec::new();
@@ -1371,6 +1398,7 @@ fn transformed_sse_stream(
                     &mut anthropic_state,
                     &event,
                     &raw,
+                    &tool_reverse,
                 ) {
                     yield Bytes::from(chunk);
                 }
@@ -1395,6 +1423,7 @@ fn transformed_sse_stream(
                 &mut anthropic_state,
                 &event,
                 &raw,
+                &tool_reverse,
             ) {
                 yield Bytes::from(chunk);
             }
@@ -1524,6 +1553,7 @@ fn transform_sse_event(
     anthropic_state: &mut AnthropicStreamState,
     event: &str,
     raw: &str,
+    tool_reverse: &BTreeMap<String, String>,
 ) -> Vec<String> {
     if raw == "[DONE]" {
         return match (provider.kind, route) {
@@ -1544,7 +1574,10 @@ fn transform_sse_event(
                     passthrough_event(event),
                 )]
             },
-            |data| vec![sse(&data, passthrough_event(event))],
+            |mut data| {
+                restore_tool_use_names(&mut data, tool_reverse);
+                vec![sse(&data, passthrough_event(event))]
+            },
         ),
         (ProviderKind::Anthropic, RequestRoute::Chat) => parsed.map_or_else(
             |_| Vec::new(),

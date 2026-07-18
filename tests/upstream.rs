@@ -209,9 +209,7 @@ fn apply_cloaking_rewrites_classifier_tripping_sentence_in_system() {
         "surrounding text must be preserved"
     );
     assert!(
-        texts
-            .iter()
-            .any(|text| *text == "You are a personal assistant running inside Lena."),
+        texts.contains(&"You are a personal assistant running inside Lena."),
         "unrelated system blocks must be byte-identical"
     );
 }
