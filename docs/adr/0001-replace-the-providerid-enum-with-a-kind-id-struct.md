@@ -13,12 +13,11 @@ that provider's tokens and as the string `/v1/models` reports in `owned_by`.
 For anthropic, codex and opencode those two jobs collapse onto one string, so a
 closed `enum ProviderId { Anthropic, Codex, Opencode }` carries both. It stops
 carrying both the moment behavior and naming stop being one-to-one.
-`docs/superpowers/specs/2026-06-04-multi-provider-support-design.md` takes
-pengepul to roughly thirty upstreams, fifteen of them OpenAI-compatible API-key
-services — groq, mistral, deepseek, openrouter and the rest — sharing one header
-builder, one translator and one auth model while needing fifteen distinct
-credential directories. An enum variant is a line of Rust. groq is a base URL
-and a key.
+Taking pengepul to roughly thirty upstreams means fifteen or so
+OpenAI-compatible API-key services — groq, mistral, deepseek, openrouter and the
+rest — sharing one header builder, one translator and one auth model while
+needing fifteen distinct credential directories. An enum variant is a line of
+Rust. groq is a base URL and a key.
 
 ## Decision
 
