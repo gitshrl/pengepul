@@ -14,14 +14,20 @@ use std::collections::BTreeMap;
 
 use serde_json::Value;
 
-/// Claude-Code-style names the classifier accepts as first-party. Large enough to
-/// cover openclaw's tool roster without collision; assignment is by stable hash.
+/// Claude-Code-style names the classifier accepts as first-party. Sized well above
+/// openclaw's tool roster (46 in 2026.7.2) so the deterministic map never spills to
+/// the numeric fallback in practice; assignment is by stable hash with probing.
 const CC_TOOL_POOL: &[&str] = &[
     "Bash", "Read", "Write", "Edit", "MultiEdit", "Glob", "Grep", "LS", "WebSearch",
     "WebFetch", "Task", "TodoWrite", "NotebookEdit", "NotebookRead", "BashOutput",
     "KillShell", "ExitPlanMode", "SlashCommand", "Agent", "Plan", "View", "Replace",
     "Fetch", "Search", "Move", "Copy", "Delete", "Diff", "Patch", "Format", "Lint",
     "Test", "Build", "Run", "Watch", "Inspect", "Trace", "Profile", "Debug", "Explain",
+    "Compile", "Deploy", "Rename", "Find", "Open", "Close", "Save", "Load", "Sync",
+    "Merge", "Split", "Filter", "Sort", "Count", "List", "Show", "Print", "Parse",
+    "Render", "Compress", "Extract", "Encode", "Decode", "Validate", "Verify", "Analyze",
+    "Report", "Query", "Apply", "Revert", "Stage", "Commit", "Branch", "Checkout",
+    "Clone", "Push", "Pull", "Tag", "Log", "Blame", "Stash", "Rebase",
 ];
 
 /// Case-insensitive keywords that mark a system-prompt heading as chat-bot
@@ -58,8 +64,9 @@ fn heading_level(line: &str) -> Option<usize> {
 }
 
 /// FNV-1a over the tool name → a stable pool index; linear-probe keeps the map
-/// bijective within a request.
-fn pseudo_for(name: &str, taken: &mut [bool]) -> String {
+/// bijective within a request. Returns `None` if the pool is exhausted (more tools
+/// than pool names), in which case the tool keeps its original name.
+fn pseudo_for(name: &str, taken: &mut [bool]) -> Option<String> {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for byte in name.bytes() {
         hash ^= u64::from(byte);
@@ -70,11 +77,10 @@ fn pseudo_for(name: &str, taken: &mut [bool]) -> String {
         let idx = (start + offset) % CC_TOOL_POOL.len();
         if !taken[idx] {
             taken[idx] = true;
-            return CC_TOOL_POOL[idx].to_string();
+            return Some(CC_TOOL_POOL[idx].to_string());
         }
     }
-    // Pool exhausted (more tools than names): fall back to a deterministic suffix.
-    format!("Tool{start}")
+    None
 }
 
 fn build_tool_map(tools: &[Value]) -> BTreeMap<String, String> {
@@ -83,8 +89,8 @@ fn build_tool_map(tools: &[Value]) -> BTreeMap<String, String> {
     for tool in tools {
         if let Some(name) = tool.get("name").and_then(Value::as_str)
             && !map.contains_key(name)
+            && let Some(pseudo) = pseudo_for(name, &mut taken)
         {
-            let pseudo = pseudo_for(name, &mut taken);
             map.insert(name.to_string(), pseudo);
         }
     }
