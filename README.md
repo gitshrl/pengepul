@@ -159,6 +159,69 @@ Many opencode models spend tokens on hidden reasoning first, so leave `max_token
 unset or generous — too small a cap is consumed by reasoning and `content` comes
 back empty with `finish_reason: length`.
 
+## Clients
+
+Point a client at `http://<host>:8317` with a key from `api-keys`. Two agent
+frameworks that route their native Anthropic traffic through pengepul:
+
+### openclaw
+
+The embedded runner talks native Anthropic Messages. In `~/.openclaw/openclaw.json`,
+define the `anthropic` provider against pengepul and select it with an `anthropic/`
+prefixed model (a bare `claude-…` resolves to the claude-cli backend and bypasses
+pengepul):
+
+```json
+{
+  "agents": { "defaults": { "model": { "primary": "anthropic/claude-opus-4-8" } } },
+  "models": {
+    "providers": {
+      "anthropic": {
+        "baseUrl": "http://127.0.0.1:8317",
+        "apiKey": "<pengepul api-key>",
+        "auth": "api-key",
+        "models": [
+          { "id": "claude-opus-4-8", "api": "anthropic-messages", "contextWindow": 1000000, "maxTokens": 64000 }
+        ]
+      }
+    }
+  }
+}
+```
+
+### hermes (Nous hermes-agent)
+
+Register pengepul as a **named provider** on the native Messages wire — written via
+`hermes config set` (into `HERMES_HOME/config.yaml`):
+
+```sh
+hermes config set model.provider pengepul
+hermes config set model.default claude-opus-4-8
+hermes config set providers.pengepul.base_url http://127.0.0.1:8317
+hermes config set providers.pengepul.api_mode anthropic_messages
+hermes config set providers.pengepul.api_key <pengepul api-key>
+```
+
+```yaml
+model:
+  provider: pengepul
+  default: claude-opus-4-8
+providers:
+  pengepul:
+    base_url: http://127.0.0.1:8317    # ROOT — the Anthropic SDK appends /v1/messages
+    api_mode: anthropic_messages         # explicit → native Messages wire, no /anthropic suffix
+    api_key: <pengepul api-key>          # sent as x-api-key verbatim; a plain sk-local-/pgpl- key is fine
+```
+
+- `api_mode: anthropic_messages` forces the native wire on a root `base_url`, so no
+  extra pengepul route is needed.
+- Use `provider: pengepul` (not `anthropic`) so hermes does **not** autodiscover the
+  operator's `~/.claude` Claude-Code OAuth — that would force `api.anthropic.com` and
+  bypass pengepul.
+- Changing `providers.*.api_key` inside an existing `HERMES_HOME` caches the old
+  key's rejection in `auth.json` ("No inference provider configured"); use a fresh
+  home or delete `auth.json` when rotating.
+
 ## Behavior
 
 - Account selection is strict round-robin, with no session affinity.
