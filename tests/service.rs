@@ -227,3 +227,20 @@ fn systemd_exec_start_quotes_paths_containing_spaces() {
         "spaced paths must be quoted, unspaced args left bare:\n{unit}"
     );
 }
+
+#[test]
+fn run_command_captures_stderr_instead_of_leaking_it() {
+    // launchctl bootout on a service that was never loaded is expected to fail;
+    // its chatter must be captured, not printed, and a real failure must carry it.
+    let error = pengepul::service::run_command(&[
+        "sh".to_string(),
+        "-c".to_string(),
+        "echo 'Boot-out failed: 3: No such process' >&2; exit 1".to_string(),
+    ])
+    .expect_err("must fail");
+
+    assert!(
+        error.to_string().contains("Boot-out failed"),
+        "stderr must be captured into the error, not inherited: {error}"
+    );
+}

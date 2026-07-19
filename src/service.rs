@@ -190,14 +190,23 @@ pub fn run_command(command: &[String]) -> Result<ExitStatus> {
     let Some((program, args)) = command.split_first() else {
         bail!("empty command");
     };
-    let status = Command::new(program)
+    // Captured, not inherited: several of these commands are run for their effect
+    // and their failure tolerated (booting out a service that was never loaded),
+    // so their chatter must not reach the terminal. A failure that is *not*
+    // tolerated carries the captured stderr instead of a bare exit code.
+    let output = Command::new(program)
         .args(args)
-        .status()
+        .output()
         .with_context(|| format!("failed to run {program}"))?;
-    if !status.success() {
-        bail!("{program} exited with {status}");
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr);
+        let detail = detail.trim();
+        if detail.is_empty() {
+            bail!("{program} exited with {}", output.status);
+        }
+        bail!("{program} exited with {}: {detail}", output.status);
     }
-    Ok(status)
+    Ok(output.status)
 }
 
 fn run(runner: &mut impl FnMut(&[String]) -> Result<ExitStatus>, command: &[&str]) -> Result<()> {

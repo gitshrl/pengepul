@@ -572,9 +572,10 @@ fn control_platform_service(action: &str) -> Result<()> {
             );
         }
         // Fails when already loaded, which is the common case and not an error.
+        // Output is captured so that expected failure stays off the terminal.
         let _ = std::process::Command::new("launchctl")
             .args(["bootstrap", &format!("gui/{uid}"), &plist.to_string_lossy()])
-            .status();
+            .output();
     }
     let command = match action {
         "start" => vec!["launchctl", "kickstart", &target],
@@ -615,9 +616,11 @@ fn launchd_plist_path() -> Result<PathBuf> {
 fn uninstall_platform_service(home: &std::path::Path) -> Result<PathBuf> {
     let uid = current_uid()?;
     let target = format!("gui/{uid}/{}", crate::service::LAUNCHD_LABEL);
+    // Tolerated and quiet: the service may not be loaded, and the plist removal
+    // below is what actually uninstalls it.
     let _ = std::process::Command::new("launchctl")
         .args(["bootout", &target])
-        .status();
+        .output();
     let path = home
         .join("Library/LaunchAgents")
         .join(format!("{}.plist", crate::service::LAUNCHD_LABEL));
