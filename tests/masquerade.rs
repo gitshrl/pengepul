@@ -119,6 +119,55 @@ fn assistant_tool_use_names_are_mapped_in_request_history() {
 }
 
 #[test]
+fn strips_thinking_from_completed_turns_but_keeps_tool_continuation() {
+    // Native web_search leaves orphaned thinking (server-tool blocks dropped by
+    // openclaw). Thinking on a completed turn must be stripped; thinking on a turn a
+    // tool_result answers must be kept.
+    let body = json!({
+        "messages": [
+            {"role": "user", "content": "run ls"},
+            {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "let me run it", "signature": "sig1"},
+                {"type": "tool_use", "id": "tu_1", "name": "exec", "input": {}}
+            ]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "tu_1", "content": "ok"}]},
+            {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "searched", "signature": "sig2"},
+                {"type": "text", "text": "here is the answer"}
+            ]},
+            {"role": "user", "content": "thanks"}
+        ]
+    });
+    let (out, _rev) = masquerade_request(&body);
+    let m = out["messages"].as_array().unwrap();
+
+    // tool-continuation turn keeps its thinking (a tool_result answers it)
+    let types1: Vec<&str> = m[1]["content"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|b| b["type"].as_str())
+        .collect();
+    assert!(
+        types1.contains(&"thinking"),
+        "tool-continuation thinking must be kept"
+    );
+
+    // completed turn has its orphaned thinking stripped
+    let types3: Vec<&str> = m[3]["content"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|b| b["type"].as_str())
+        .collect();
+    assert!(
+        !types3.contains(&"thinking"),
+        "completed-turn thinking must be stripped"
+    );
+    assert!(types3.contains(&"text"), "completed-turn text must survive");
+}
+
+#[test]
 fn system_prompt_strips_only_the_two_classifier_sections() {
     // Only `## Assistant Output Directives` and `## Inbound Context (trusted
     // metadata)` trip the classifier; every other bot section is kept so openclaw's

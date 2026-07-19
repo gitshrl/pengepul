@@ -162,6 +162,46 @@ fn sanitize_system_text(text: &str, tool_map: &BTreeMap<String, String>) -> Stri
     out
 }
 
+/// Drop `thinking`/`redacted_thinking` blocks from completed assistant turns.
+///
+/// Native `web_search`/`web_fetch` return `thinking` interleaved with
+/// `server_tool_use`/`*_tool_result` blocks. openclaw persists the thinking but
+/// drops the server-tool blocks, so on replay Anthropic sees the thinking as
+/// "modified" and rejects the request. Anthropic only requires thinking to be
+/// preserved on an assistant turn that a `tool_result` immediately answers; every
+/// other (completed) assistant turn may omit it. So thinking is kept only when the
+/// next message carries a `tool_result`, and stripped otherwise.
+fn strip_orphan_thinking(messages: &mut Value) {
+    let Some(list) = messages.as_array_mut() else {
+        return;
+    };
+    let answered: Vec<bool> = (0..list.len())
+        .map(|i| {
+            list.get(i + 1)
+                .and_then(|m| m.get("content"))
+                .and_then(Value::as_array)
+                .is_some_and(|content| {
+                    content
+                        .iter()
+                        .any(|b| b.get("type").and_then(Value::as_str) == Some("tool_result"))
+                })
+        })
+        .collect();
+    for (i, message) in list.iter_mut().enumerate() {
+        if message.get("role").and_then(Value::as_str) != Some("assistant") || answered[i] {
+            continue;
+        }
+        if let Some(content) = message.get_mut("content").and_then(Value::as_array_mut) {
+            content.retain(|b| {
+                !matches!(
+                    b.get("type").and_then(Value::as_str),
+                    Some("thinking" | "redacted_thinking")
+                )
+            });
+        }
+    }
+}
+
 fn remap_tool_use_names(messages: &mut Value, tool_map: &BTreeMap<String, String>) {
     let Some(list) = messages.as_array_mut() else {
         return;
@@ -228,6 +268,7 @@ pub fn masquerade_request(body: &Value) -> (Value, BTreeMap<String, String>) {
 
     if let Some(messages) = object.get_mut("messages") {
         remap_tool_use_names(messages, &tool_map);
+        strip_orphan_thinking(messages);
     }
 
     let reverse = tool_map.into_iter().map(|(k, v)| (v, k)).collect();
