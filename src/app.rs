@@ -1382,6 +1382,8 @@ fn transformed_sse_stream(
         let mut anthropic_state = AnthropicStreamState::new(model.clone());
         let mut usage = UsageData::default();
         let mut completed = false;
+        let mut refusal_next_index: u64 = 0;
+        let mut refusal_open_index: Option<u64> = None;
 
         while let Some(chunk) = input.next().await {
             let chunk = match chunk {
@@ -1403,17 +1405,28 @@ fn transformed_sse_stream(
             };
             for (event, raw) in events {
                 update_stream_usage(&provider, &event, &raw, &mut usage, &mut completed);
-                for chunk in transform_sse_event(
+                let chunks = match forward_refusal_event(
                     &provider,
                     route,
-                    &model,
-                    &mut chat_state,
-                    &mut responses_state,
-                    &mut anthropic_state,
                     &event,
                     &raw,
-                    &tool_reverse,
+                    &mut refusal_next_index,
+                    &mut refusal_open_index,
                 ) {
+                    Some(replacement) => replacement,
+                    None => transform_sse_event(
+                        &provider,
+                        route,
+                        &model,
+                        &mut chat_state,
+                        &mut responses_state,
+                        &mut anthropic_state,
+                        &event,
+                        &raw,
+                        &tool_reverse,
+                    ),
+                };
+                for chunk in chunks {
                     yield Bytes::from(chunk);
                 }
             }
@@ -1428,17 +1441,28 @@ fn transformed_sse_stream(
         };
         for (event, raw) in events {
             update_stream_usage(&provider, &event, &raw, &mut usage, &mut completed);
-            for chunk in transform_sse_event(
+            let chunks = match forward_refusal_event(
                 &provider,
                 route,
-                &model,
-                &mut chat_state,
-                &mut responses_state,
-                &mut anthropic_state,
                 &event,
                 &raw,
-                &tool_reverse,
+                &mut refusal_next_index,
+                &mut refusal_open_index,
             ) {
+                Some(replacement) => replacement,
+                None => transform_sse_event(
+                    &provider,
+                    route,
+                    &model,
+                    &mut chat_state,
+                    &mut responses_state,
+                    &mut anthropic_state,
+                    &event,
+                    &raw,
+                    &tool_reverse,
+                ),
+            };
+            for chunk in chunks {
                 yield Bytes::from(chunk);
             }
         }
@@ -1555,6 +1579,86 @@ fn update_chat_stream_usage(data: &Value, usage: &mut UsageData) {
 
 fn int_field_or(value: &Value, key: &str, default: i64) -> i64 {
     value.get(key).and_then(Value::as_i64).unwrap_or(default)
+}
+
+/// Turn an Anthropic streaming refusal into a deliverable assistant text message.
+///
+/// A refusal arrives as a `message_delta` with `delta.stop_reason == "refusal"` and
+/// no content, which openclaw surfaces to the user only as a generic "LLM request
+/// failed". To make the reason visible in the chat, inject a text block carrying it
+/// and rewrite the stop reason to `end_turn` so the turn reads as a normal
+/// completion. `next_index`/`open_index` track the content-block cursor so the
+/// injected block lands on a free index (and any open block is closed first).
+/// Returns the replacement SSE chunks for a refusal event, or `None` to fall
+/// through to the normal transform.
+fn forward_refusal_event(
+    provider: &ProviderId,
+    route: RequestRoute,
+    event: &str,
+    raw: &str,
+    next_index: &mut u64,
+    open_index: &mut Option<u64>,
+) -> Option<Vec<String>> {
+    if provider.kind != ProviderKind::Anthropic || !matches!(route, RequestRoute::Messages) {
+        return None;
+    }
+    let data = serde_json::from_str::<Value>(raw).ok()?;
+    match event {
+        "content_block_start" => {
+            if let Some(i) = data.get("index").and_then(Value::as_u64) {
+                *next_index = i + 1;
+                *open_index = Some(i);
+            }
+            None
+        }
+        "content_block_stop" => {
+            *open_index = None;
+            None
+        }
+        "message_delta"
+            if data.pointer("/delta/stop_reason").and_then(Value::as_str) == Some("refusal") =>
+        {
+            let category = data
+                .pointer("/delta/stop_details/category")
+                .and_then(Value::as_str)
+                .unwrap_or("unspecified");
+            let reason = format!(
+                "⚠️ Upstream refusal: Anthropic declined to generate a response (safety category: {category})."
+            );
+            let mut out = Vec::new();
+            if let Some(open) = open_index.take() {
+                out.push(sse(
+                    &serde_json::json!({"type": "content_block_stop", "index": open}),
+                    Some("content_block_stop"),
+                ));
+            }
+            let idx = *next_index;
+            out.push(sse(
+                &serde_json::json!({
+                    "type": "content_block_start", "index": idx,
+                    "content_block": {"type": "text", "text": ""}
+                }),
+                Some("content_block_start"),
+            ));
+            out.push(sse(
+                &serde_json::json!({
+                    "type": "content_block_delta", "index": idx,
+                    "delta": {"type": "text_delta", "text": reason}
+                }),
+                Some("content_block_delta"),
+            ));
+            out.push(sse(
+                &serde_json::json!({"type": "content_block_stop", "index": idx}),
+                Some("content_block_stop"),
+            ));
+            let mut fixed = data;
+            fixed["delta"]["stop_reason"] = Value::String("end_turn".to_string());
+            fixed["delta"]["stop_details"] = Value::Null;
+            out.push(sse(&fixed, Some("message_delta")));
+            Some(out)
+        }
+        _ => None,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1862,8 +1966,8 @@ mod tests {
     use super::{
         AccountManagers, AppState, BodyLimit, RateLimitBucket, RequestRoute, UpstreamClient,
         UpstreamFuture, UpstreamJsonResponse, UpstreamRequest, UpstreamSseFuture,
-        build_upstream_request, decode_upstream_body, is_decoded_upstream_error,
-        route_provider_request,
+        build_upstream_request, decode_upstream_body, forward_refusal_event,
+        is_decoded_upstream_error, route_provider_request,
     };
     use crate::accounts::{AccountManager, RefreshPolicy};
     use crate::config::{CloakingConfig, Config, DebugMode, TimeoutConfig};
@@ -1872,6 +1976,65 @@ mod tests {
     use crate::types::{ProviderId, TokenData};
     use serde_json::{Value, json};
     use std::collections::BTreeMap;
+
+    #[test]
+    fn refusal_stream_event_becomes_deliverable_text() {
+        let mut next = 0u64;
+        let mut open = None;
+        let raw = r#"{"type":"message_delta","delta":{"stop_reason":"refusal","stop_details":{"category":"bio","type":"refusal"}}}"#;
+        let out = forward_refusal_event(
+            &ProviderId::anthropic(),
+            RequestRoute::Messages,
+            "message_delta",
+            raw,
+            &mut next,
+            &mut open,
+        )
+        .expect("refusal is replaced");
+        let joined = out.join("");
+        assert!(
+            joined.contains("content_block_start"),
+            "injects a text block"
+        );
+        assert!(
+            joined.contains("safety category: bio"),
+            "carries the reason"
+        );
+        assert!(
+            joined.contains("\"stop_reason\":\"end_turn\""),
+            "stop_reason rewritten so openclaw treats it as a normal completion"
+        );
+    }
+
+    #[test]
+    fn non_refusal_events_pass_through() {
+        let mut next = 0u64;
+        let mut open = None;
+        // a normal stop passes through (None → normal transform)
+        let normal = r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"}}"#;
+        assert!(
+            forward_refusal_event(
+                &ProviderId::anthropic(),
+                RequestRoute::Messages,
+                "message_delta",
+                normal,
+                &mut next,
+                &mut open,
+            )
+            .is_none()
+        );
+        // content_block_start advances the injection cursor past the used index
+        forward_refusal_event(
+            &ProviderId::anthropic(),
+            RequestRoute::Messages,
+            "content_block_start",
+            r#"{"type":"content_block_start","index":0}"#,
+            &mut next,
+            &mut open,
+        );
+        assert_eq!(next, 1, "next injection index moves past block 0");
+        assert_eq!(open, Some(0));
+    }
 
     #[test]
     fn upstream_request_sends_single_content_type() {
