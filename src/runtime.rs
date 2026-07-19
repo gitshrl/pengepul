@@ -1,4 +1,5 @@
 use std::io::{BufRead as _, Write as _};
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -122,6 +123,49 @@ impl CliRuntime for RealRuntime {
 
     fn service_logs(&mut self, follow: bool, lines: u32) -> Result<()> {
         platform_service_logs(follow, lines)
+    }
+
+    fn latest_release_tag(&mut self) -> Result<String> {
+        let payload: Value = self.runtime.block_on(async {
+            let response = release_client()?
+                .get(format!(
+                    "https://api.github.com/repos/{RELEASE_REPO}/releases/latest"
+                ))
+                .send()
+                .await
+                .context("failed to reach the GitHub release API")?;
+            let status = response.status();
+            if !status.is_success() {
+                bail!("GitHub release API returned {status}");
+            }
+            response
+                .json()
+                .await
+                .context("release API returned an unreadable body")
+        })?;
+        payload
+            .get("tag_name")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+            .context("release API response carried no tag_name")
+    }
+
+    fn install_release(&mut self, tag: &str, asset: &str) -> Result<PathBuf> {
+        let base = format!("https://github.com/{RELEASE_REPO}/releases/download/{tag}");
+        let archive = self
+            .runtime
+            .block_on(download(&format!("{base}/{asset}")))?;
+        let checksums = self
+            .runtime
+            .block_on(download(&format!("{base}/checksums.txt")))?;
+        verify_checksum(&archive, &String::from_utf8_lossy(&checksums), asset)?;
+
+        let target = std::env::current_exe().context("cannot locate the running binary")?;
+        let directory = target
+            .parent()
+            .context("running binary has no parent directory")?;
+        unpack_over(&archive, &target, directory)?;
+        Ok(target)
     }
 
     fn login(
@@ -652,11 +696,186 @@ fn command_output(command: &[&str]) -> Result<String> {
     }
 }
 
+const RELEASE_REPO: &str = "gitshrl/pengepul";
+
+fn release_client() -> Result<reqwest::Client> {
+    reqwest::Client::builder()
+        // GitHub rejects API requests without one.
+        .user_agent(concat!("pengepul/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .context("failed to build the release HTTP client")
+}
+
+async fn download(url: &str) -> Result<Vec<u8>> {
+    let response = release_client()?
+        .get(url)
+        .send()
+        .await
+        .with_context(|| format!("failed to download {url}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        bail!("{url} returned {status}");
+    }
+    Ok(response
+        .bytes()
+        .await
+        .with_context(|| format!("failed to read {url}"))?
+        .to_vec())
+}
+
+/// Match the archive against its published digest.
+///
+/// This catches a truncated or corrupted download, not a compromised release.
+fn verify_checksum(archive: &[u8], checksums: &str, asset: &str) -> Result<()> {
+    use sha2::{Digest as _, Sha256};
+
+    let expected = checksums
+        .lines()
+        .find_map(|line| {
+            let (digest, name) = line.split_once("  ")?;
+            (name.trim() == asset).then_some(digest)
+        })
+        .with_context(|| format!("checksums.txt carries no entry for {asset}"))?;
+    let actual = format!("{:x}", Sha256::digest(archive));
+    if actual != expected {
+        bail!("checksum mismatch for {asset}");
+    }
+    Ok(())
+}
+
+/// Unpack the archive and move the binary onto `target`.
+///
+/// Staged inside the target's own directory so the final step is a same-filesystem
+/// rename: an interrupted update can never leave a half-written binary in place.
+/// Replacing a running executable this way is safe on Unix — the running process
+/// keeps the old inode.
+fn unpack_over(
+    archive: &[u8],
+    target: &std::path::Path,
+    directory: &std::path::Path,
+) -> Result<()> {
+    let scratch = directory.join(format!(".pengepul-update-{}", std::process::id()));
+    std::fs::create_dir_all(&scratch).with_context(|| {
+        format!(
+            "cannot write to {}; re-run with sudo or reinstall with install.sh",
+            directory.display()
+        )
+    })?;
+    let cleanup = || drop(std::fs::remove_dir_all(&scratch));
+
+    let tarball = scratch.join("pengepul.tar.gz");
+    if let Err(error) = std::fs::write(&tarball, archive) {
+        cleanup();
+        return Err(error).context("failed to stage the downloaded archive");
+    }
+
+    let unpacked = run_command(&[
+        "tar".to_string(),
+        "xzf".to_string(),
+        tarball.to_string_lossy().into_owned(),
+        "-C".to_string(),
+        scratch.to_string_lossy().into_owned(),
+    ]);
+    match unpacked {
+        Ok(status) if status.success() => {}
+        Ok(status) => {
+            cleanup();
+            bail!("tar exited with {status}");
+        }
+        Err(error) => {
+            cleanup();
+            return Err(error).context("failed to run tar");
+        }
+    }
+
+    let binary = scratch.join("pengepul");
+    if !binary.is_file() {
+        cleanup();
+        bail!("the release archive did not contain pengepul");
+    }
+    let staged = directory.join(format!(".pengepul-new-{}", std::process::id()));
+    let outcome = std::fs::rename(&binary, &staged)
+        .context("failed to stage the new binary")
+        .and_then(|()| {
+            std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755))
+                .context("failed to mark the new binary executable")
+        })
+        .and_then(|()| {
+            std::fs::rename(&staged, target).with_context(|| {
+                format!(
+                    "cannot replace {}; re-run with sudo or reinstall with install.sh",
+                    target.display()
+                )
+            })
+        });
+    cleanup();
+    if outcome.is_err() {
+        drop(std::fs::remove_file(&staged));
+    }
+    outcome
+}
 #[cfg(test)]
 mod tests {
-    use super::{import_opencode_key_from, opencode_auth_json_paths, opencode_key_from_auth_json};
+    use super::{
+        import_opencode_key_from, opencode_auth_json_paths, opencode_key_from_auth_json,
+        unpack_over, verify_checksum,
+    };
     use serde_json::json;
     use std::path::PathBuf;
+
+    #[test]
+    fn verify_checksum_matches_the_published_format() {
+        // `sha256sum *.tar.gz` writes "<digest>  <name>" with two spaces.
+        let archive = b"payload";
+        let digest = "239f59ed55e737c77147cf55ad0c1b030b6d7ee748a7426952f9b852d5a935e5";
+        let checksums =
+            format!("{digest}  pengepul-linux-x86_64.tar.gz\ndead  pengepul-macos-arm64.tar.gz\n");
+
+        verify_checksum(archive, &checksums, "pengepul-linux-x86_64.tar.gz").expect("matches");
+        verify_checksum(archive, &checksums, "pengepul-macos-arm64.tar.gz")
+            .expect_err("digest mismatch must fail");
+        verify_checksum(archive, &checksums, "pengepul-windows.tar.gz")
+            .expect_err("a missing entry must fail, never pass silently");
+    }
+
+    #[test]
+    fn unpack_over_replaces_the_target_binary() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let source = tmp.path().join("src");
+        std::fs::create_dir_all(&source).expect("mkdir");
+        std::fs::write(source.join("pengepul"), b"#!/bin/sh\necho new\n").expect("write");
+        let archive_path = tmp.path().join("a.tar.gz");
+        assert!(
+            super::run_command(&[
+                "tar".to_string(),
+                "czf".to_string(),
+                archive_path.to_string_lossy().into_owned(),
+                "-C".to_string(),
+                source.to_string_lossy().into_owned(),
+                "pengepul".to_string(),
+            ])
+            .expect("tar runs")
+            .success()
+        );
+        let archive = std::fs::read(&archive_path).expect("read archive");
+
+        let install_dir = tmp.path().join("bin");
+        std::fs::create_dir_all(&install_dir).expect("mkdir bin");
+        let target = install_dir.join("pengepul");
+        std::fs::write(&target, b"old").expect("seed old binary");
+
+        unpack_over(&archive, &target, &install_dir).expect("unpack");
+
+        let replaced = std::fs::read_to_string(&target).expect("read replaced");
+        assert!(replaced.contains("echo new"), "binary must be replaced");
+        // no scratch or staging left behind
+        let leftovers: Vec<_> = std::fs::read_dir(&install_dir)
+            .expect("readdir")
+            .filter_map(|e| e.ok().map(|e| e.file_name().to_string_lossy().into_owned()))
+            .filter(|n| n.starts_with('.'))
+            .collect();
+        assert!(leftovers.is_empty(), "left behind: {leftovers:?}");
+    }
 
     #[test]
     fn reads_opencode_api_key() {

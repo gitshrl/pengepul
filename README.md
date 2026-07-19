@@ -14,6 +14,10 @@ curl -fsSL https://raw.githubusercontent.com/gitshrl/pengepul/main/install.sh | 
 Linux x86_64 and macOS on Apple silicon. `PENGEPUL_BIN_DIR` changes the install
 directory, `PENGEPUL_VERSION` pins a release.
 
+Once installed, `pengepul update` replaces the binary in place with the latest
+release, and `pengepul update --check` reports what is available without
+installing it. Both verify the published checksum before replacing anything.
+
 From source, against the Rust 1.96.0 pinned in `rust-toolchain.toml`:
 
 ```sh
@@ -81,7 +85,8 @@ An empty `host` binds `127.0.0.1`, not every interface. `debug` accepts `off`,
 
 ## Commands
 
-`serve` · `status` · `accounts` · `login` · `config path|show|api-key` ·
+`serve` · `status` · `accounts` · `login` · `update` ·
+`config path|show|api-key` ·
 `service install|start|stop|restart|status|uninstall|logs` · `help`
 
 `status` and `accounts` are HTTP calls to `/admin/*` on the running relay, so they
@@ -95,6 +100,7 @@ fail if it is down or its API key differs.
 | `--key <KEY>` | `login` | opencode API key, bypassing the import |
 | `--start` / `--enable` | `service install` | start now / at login |
 | `--lines <N>` / `--follow` | `service logs` | history (default 50) / stream |
+| `--check` | `update` | report the available version without installing |
 
 `--config` is not global. It must precede the subcommand unless that subcommand
 declares its own, so `pengepul --config X config show` works and

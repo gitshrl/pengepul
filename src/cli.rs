@@ -110,10 +110,24 @@ pub trait CliRuntime {
     /// Returns an error if OAuth authorization, token exchange, or token persistence fails.
     fn login(&mut self, config: &Config, provider: ProviderId, key: Option<&str>)
     -> Result<String>;
+
+    /// Resolve the tag of the newest published release.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the release cannot be resolved.
+    fn latest_release_tag(&mut self) -> Result<String>;
+
+    /// Download `asset` from release `tag`, verify it, and replace this binary.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the download, verification, or replacement fails.
+    fn install_release(&mut self, tag: &str, asset: &str) -> Result<PathBuf>;
 }
 
 #[derive(Debug, Parser)]
-#[command(name = "pengepul", disable_help_subcommand = true)]
+#[command(name = "pengepul", version, disable_help_subcommand = true)]
 struct Args {
     #[arg(long)]
     config: Option<PathBuf>,
@@ -147,6 +161,12 @@ enum Command {
     Status {
         #[arg(long = "config")]
         command_config: Option<PathBuf>,
+    },
+    /// install the latest release over this binary
+    Update {
+        /// report the available version without installing it
+        #[arg(long)]
+        check: bool,
     },
     /// show loaded provider accounts
     Accounts {
@@ -256,6 +276,7 @@ pub fn run_with_env(
             cwd,
             runtime,
         )?,
+        Some(Command::Update { check }) => update(check, runtime, &mut output)?,
         Some(Command::Status { command_config }) => {
             status(
                 command_config.as_deref().or(parsed_args.config.as_deref()),
@@ -398,6 +419,9 @@ fn config_command(
             output.line(&first_api_key(&config)?);
         }
         ConfigCommand::Show => {
+            // Generates the config when absent, so `show` works on a fresh
+            // install like every other config subcommand.
+            load_config(config_path, Some(home), cwd)?;
             let text = std::fs::read_to_string(&path)
                 .with_context(|| format!("failed to read {}", path.display()))?;
             output.line(text.trim_end());
@@ -452,6 +476,63 @@ fn service_command(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Release asset for the platform this binary was built for.
+///
+/// # Errors
+///
+/// Returns an error on a platform with no published build.
+pub fn release_asset() -> Result<&'static str> {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("linux", "x86_64") => Ok("pengepul-linux-x86_64.tar.gz"),
+        ("macos", "aarch64") => Ok("pengepul-macos-arm64.tar.gz"),
+        (os, arch) => bail!(
+            "no published build for {os} {arch}; install from source with \
+             cargo install --git https://github.com/gitshrl/pengepul.git --locked"
+        ),
+    }
+}
+
+/// Compare a release tag against this binary's version.
+///
+/// Tags carry a leading `v`. A tag that does not parse is treated as newer, so a
+/// release naming scheme change still prompts an update rather than going silent.
+#[must_use]
+pub fn tag_is_newer(tag: &str, current: &str) -> bool {
+    fn parts(value: &str) -> Option<(u64, u64, u64)> {
+        let mut it = value.trim_start_matches('v').split('.');
+        Some((
+            it.next()?.parse().ok()?,
+            it.next()?.parse().ok()?,
+            it.next()?.split(['-', '+']).next()?.parse().ok()?,
+        ))
+    }
+    match (parts(tag), parts(current)) {
+        (Some(latest), Some(running)) => latest > running,
+        _ => true,
+    }
+}
+
+fn update(check: bool, runtime: &mut impl CliRuntime, output: &mut Output) -> Result<()> {
+    let current = env!("CARGO_PKG_VERSION");
+    let asset = release_asset()?;
+    let tag = runtime.latest_release_tag()?;
+
+    if !tag_is_newer(&tag, current) {
+        output.line(&format!("pengepul {current} is the latest release"));
+        return Ok(());
+    }
+    if check {
+        output.line(&format!(
+            "pengepul {tag} is available (running {current}); run `pengepul update` to install it"
+        ));
+        return Ok(());
+    }
+
+    let path = runtime.install_release(&tag, asset)?;
+    output.line(&format!("updated to {tag} at {}", path.display()));
+    Ok(())
+}
+
 fn login(
     config_path: Option<&Path>,
     provider: &str,

@@ -29,10 +29,24 @@ struct FakeRuntime {
     calls: Vec<String>,
     install_request: Option<ServiceInstallRequest>,
     login_provider: Option<ProviderId>,
+    latest_tag: Option<String>,
+    installed: Option<(String, String)>,
     login_key: Option<String>,
 }
 
 impl CliRuntime for FakeRuntime {
+    fn latest_release_tag(&mut self) -> Result<String> {
+        Ok(self
+            .latest_tag
+            .clone()
+            .unwrap_or_else(|| "v0.0.1".to_string()))
+    }
+
+    fn install_release(&mut self, tag: &str, asset: &str) -> Result<std::path::PathBuf> {
+        self.installed = Some((tag.to_string(), asset.to_string()));
+        Ok(std::path::PathBuf::from("/usr/local/bin/pengepul"))
+    }
+
     fn run_server(&mut self, config: &Config, registry: &ProviderRegistry) -> Result<()> {
         self.server_host = Some(config.host.clone());
         self.server_port = Some(config.port);
@@ -378,4 +392,64 @@ fn login_opencode_passes_key() {
         outcome.stdout.trim(),
         "saved opencode account token for opencode@example.com"
     );
+}
+
+#[test]
+fn tag_is_newer_compares_versions_numerically() {
+    assert!(pengepul::cli::tag_is_newer("v0.2.0", "0.1.0"));
+    assert!(pengepul::cli::tag_is_newer("v0.1.1", "0.1.0"));
+    assert!(pengepul::cli::tag_is_newer("v1.0.0", "0.9.9"));
+    // 10 > 9 numerically, though "v0.10.0" sorts before "v0.9.0" as a string
+    assert!(pengepul::cli::tag_is_newer("v0.10.0", "0.9.0"));
+
+    assert!(!pengepul::cli::tag_is_newer("v0.1.0", "0.1.0"));
+    assert!(!pengepul::cli::tag_is_newer("v0.1.0", "0.2.0"));
+
+    // an unparseable tag prompts rather than silently never updating
+    assert!(pengepul::cli::tag_is_newer("nightly", "0.1.0"));
+}
+
+#[test]
+fn update_check_reports_without_installing() {
+    let tmp = tempdir().expect("tempdir");
+    let mut runtime = FakeRuntime {
+        latest_tag: Some("v99.0.0".to_string()),
+        ..FakeRuntime::default()
+    };
+
+    let outcome = run(&["update", "--check"], tmp.path(), &mut runtime);
+
+    assert_eq!(outcome.code, 0);
+    assert!(outcome.stdout.contains("v99.0.0"), "{}", outcome.stdout);
+    assert!(runtime.installed.is_none(), "--check must not install");
+}
+
+#[test]
+fn update_installs_when_a_newer_release_exists() {
+    let tmp = tempdir().expect("tempdir");
+    let mut runtime = FakeRuntime {
+        latest_tag: Some("v99.0.0".to_string()),
+        ..FakeRuntime::default()
+    };
+
+    let outcome = run(&["update"], tmp.path(), &mut runtime);
+
+    assert_eq!(outcome.code, 0);
+    let (tag, asset) = runtime.installed.expect("must install");
+    assert_eq!(tag, "v99.0.0");
+    assert!(asset.ends_with(".tar.gz"), "asset was {asset}");
+}
+
+#[test]
+fn update_is_a_noop_when_already_current() {
+    let tmp = tempdir().expect("tempdir");
+    let mut runtime = FakeRuntime {
+        latest_tag: Some("v0.0.1".to_string()),
+        ..FakeRuntime::default()
+    };
+
+    let outcome = run(&["update"], tmp.path(), &mut runtime);
+
+    assert!(outcome.stdout.contains("latest"), "{}", outcome.stdout);
+    assert!(runtime.installed.is_none(), "must not reinstall");
 }
