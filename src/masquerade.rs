@@ -152,13 +152,45 @@ fn sanitize_system_text(text: &str, tool_map: &BTreeMap<String, String>) -> Stri
     }
     let mut out = kept.join("\n");
 
-    // Rename the tool listing ("- <name>: ...") to the pseudo-names. Confined to
-    // that pattern so common English words (read/edit/message/process) in prose
-    // are not clobbered.
+    // Rename tool references to the pseudo-names. A single-word name (read, edit,
+    // memory, process) is renamed only in the tool listing ("- <name>: ...") so
+    // ordinary English prose is not clobbered. A multi-word snake_case name
+    // (session_search, skill_manage) is an unambiguous tool reference, so rename it
+    // wherever it appears — the classifier also flags snake_case tool names inside
+    // the prompt prose, not just the tool array.
     for (orig, pseudo) in tool_map {
-        out = out.replace(&format!("- {orig}:"), &format!("- {pseudo}:"));
+        if orig.contains('_') {
+            out = replace_word(&out, orig, pseudo);
+        } else {
+            out = out.replace(&format!("- {orig}:"), &format!("- {pseudo}:"));
+        }
     }
 
+    out
+}
+
+/// Replace whole-word occurrences of `word` (an ASCII identifier) with `replacement`.
+/// A match is a boundary hit only when the characters on both sides are not
+/// identifier characters, so `read_file` in `read_files` or `xread_file` is left
+/// alone.
+fn replace_word(haystack: &str, word: &str, replacement: &str) -> String {
+    let is_word_byte = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let bytes = haystack.as_bytes();
+    let mut out = String::with_capacity(haystack.len());
+    let mut i = 0;
+    while i < haystack.len() {
+        if haystack[i..].starts_with(word) && (i == 0 || !is_word_byte(bytes[i - 1])) && {
+            let after = i + word.len();
+            after >= haystack.len() || !is_word_byte(bytes[after])
+        } {
+            out.push_str(replacement);
+            i += word.len();
+        } else {
+            let ch = haystack[i..].chars().next().expect("valid char boundary");
+            out.push(ch);
+            i += ch.len_utf8();
+        }
+    }
     out
 }
 

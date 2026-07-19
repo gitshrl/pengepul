@@ -210,6 +210,47 @@ fn system_prompt_strips_only_the_two_classifier_sections() {
 }
 
 #[test]
+fn snake_case_tool_refs_in_prose_are_renamed_but_words_are_not_clobbered() {
+    // The classifier flags snake_case tool names in the prompt prose, not just the
+    // tool array. Multi-word names are renamed wherever they appear; single-word
+    // names (which double as English) are left alone outside the tool listing.
+    let body = json!({
+        "tools": [
+            {"name": "session_search", "description": "d", "input_schema": {}},
+            {"name": "process", "description": "d", "input_schema": {}}
+        ],
+        "system": [{"type": "text", "text": concat!(
+            "Use session_search to recall past context.\n",
+            "The review process is important and you must process input carefully.\n",
+            "- session_search: search transcripts\n",
+            "- process: manage processes\n"
+        )}],
+        "messages": [{"role": "user", "content": "hi"}]
+    });
+    let (out, _rev) = masquerade_request(&body);
+    let sys = out["system"][0]["text"].as_str().unwrap();
+
+    // multi-word tool ref renamed in prose
+    assert!(
+        sys.contains("Use SessionSearch to recall"),
+        "session_search → SessionSearch in prose"
+    );
+    assert!(
+        !sys.contains("session_search"),
+        "no snake_case tool ref survives"
+    );
+    // single-word English usage untouched
+    assert!(
+        sys.contains("review process is important"),
+        "English 'process' not clobbered"
+    );
+    assert!(
+        sys.contains("must process input"),
+        "English 'process' verb not clobbered"
+    );
+}
+
+#[test]
 fn masquerade_leaves_persona_line_untouched() {
     let body = fixture();
     let persona = body["system"][0]["text"]
