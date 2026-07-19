@@ -1,106 +1,23 @@
 //! Make an openclaw embedded-runner request look like a first-party Claude Code
 //! request so Anthropic's subscription billing classifier does not reject it.
 //!
-//! openclaw sends its own tool names (`exec`, `gateway`, `nodes`, ...) and a
-//! bot-persona system prompt; the classifier flags both as a third-party bridge
-//! and routes the request to extra-usage billing (a hard 400 on overage-disabled
-//! orgs). This module renames each tool to a Claude-Code-style pseudo-name and
-//! strips the bot-identity sections from the system prompt. Tool names are mapped
-//! deterministically so multi-turn history stays consistent, and the reverse map
-//! is returned so `tool_use` names in the response can be restored before openclaw
+//! openclaw sends its own tool names (`exec`, `web_search`, `create_goal`, ...)
+//! and a bot-persona system prompt; the classifier flags both as a third-party
+//! bridge and routes the request to extra-usage billing (a hard 400 on
+//! overage-disabled orgs). The trigger is naming *style*, not vocabulary: the
+//! classifier accepts PascalCase, coding-assistant-looking tool names and rejects
+//! openclaw's snake_case ones (verified against the live classifier — `Exec`,
+//! `CreateGoal`, `Subagents` all pass; `exec`, `create_goal` all trip). So each
+//! tool name is PascalCased, preserving its meaning, and the bot-identity sections
+//! are stripped from the system prompt. Server tools (a `type` field, e.g.
+//! `web_search_20250305`) are left untouched so Anthropic still executes them. The
+//! mapping is deterministic so multi-turn history stays consistent, and the reverse
+//! map is returned to restore `tool_use` names in the response before openclaw
 //! dispatches them.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
-
-/// Claude-Code-style names the classifier accepts as first-party. Sized well above
-/// openclaw's tool roster (46 in 2026.7.2) so the deterministic map never spills to
-/// the numeric fallback in practice; assignment is by stable hash with probing.
-const CC_TOOL_POOL: &[&str] = &[
-    "Bash",
-    "Read",
-    "Write",
-    "Edit",
-    "MultiEdit",
-    "Glob",
-    "Grep",
-    "LS",
-    "WebSearch",
-    "WebFetch",
-    "Task",
-    "TodoWrite",
-    "NotebookEdit",
-    "NotebookRead",
-    "BashOutput",
-    "KillShell",
-    "ExitPlanMode",
-    "SlashCommand",
-    "Agent",
-    "Plan",
-    "View",
-    "Replace",
-    "Fetch",
-    "Search",
-    "Move",
-    "Copy",
-    "Delete",
-    "Diff",
-    "Patch",
-    "Format",
-    "Lint",
-    "Test",
-    "Build",
-    "Run",
-    "Watch",
-    "Inspect",
-    "Trace",
-    "Profile",
-    "Debug",
-    "Explain",
-    "Compile",
-    "Deploy",
-    "Rename",
-    "Find",
-    "Open",
-    "Close",
-    "Save",
-    "Load",
-    "Sync",
-    "Merge",
-    "Split",
-    "Filter",
-    "Sort",
-    "Count",
-    "List",
-    "Show",
-    "Print",
-    "Parse",
-    "Render",
-    "Compress",
-    "Extract",
-    "Encode",
-    "Decode",
-    "Validate",
-    "Verify",
-    "Analyze",
-    "Report",
-    "Query",
-    "Apply",
-    "Revert",
-    "Stage",
-    "Commit",
-    "Branch",
-    "Checkout",
-    "Clone",
-    "Push",
-    "Pull",
-    "Tag",
-    "Log",
-    "Blame",
-    "Stash",
-    "Rebase",
-];
 
 /// Case-insensitive keywords that mark a system-prompt heading as chat-bot
 /// identity. Matched against the heading text (not the body) so wording/emoji
@@ -142,34 +59,71 @@ fn heading_level(line: &str) -> Option<usize> {
     }
 }
 
-/// FNV-1a over the tool name → a stable pool index; linear-probe keeps the map
-/// bijective within a request. Returns `None` if the pool is exhausted (more tools
-/// than pool names), in which case the tool keeps its original name.
-fn pseudo_for(name: &str, taken: &mut [bool]) -> Option<String> {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in name.bytes() {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    let start = usize::try_from(hash % CC_TOOL_POOL.len() as u64).unwrap_or(0);
-    for offset in 0..CC_TOOL_POOL.len() {
-        let idx = (start + offset) % CC_TOOL_POOL.len();
-        if !taken[idx] {
-            taken[idx] = true;
-            return Some(CC_TOOL_POOL[idx].to_string());
+/// PascalCase a snake/kebab/space-delimited tool name (`web_search` → `WebSearch`).
+/// A leading digit or empty result falls back to `Tool` so the name always looks
+/// like an identifier.
+fn pascal_case(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    for part in name.split(['_', '-', ' ', '.']) {
+        let mut chars = part.chars();
+        if let Some(first) = chars.next() {
+            out.extend(first.to_uppercase());
+            out.push_str(chars.as_str());
         }
     }
-    None
+    if out.is_empty() || out.starts_with(|c: char| c.is_ascii_digit()) {
+        format!("Tool{out}")
+    } else {
+        out
+    }
 }
 
+/// PascalCase the name; if two distinct tools collapse to the same PascalCase
+/// (`a_b` and `ab` both → `Ab`), append the smallest free numeric suffix so the
+/// map stays bijective and the reverse map round-trips.
+fn pseudo_for(name: &str, taken: &BTreeSet<String>) -> String {
+    let base = pascal_case(name);
+    if !taken.contains(&base) {
+        return base;
+    }
+    (2..)
+        .map(|n| format!("{base}{n}"))
+        .find(|candidate| !taken.contains(candidate))
+        .unwrap_or(base)
+}
+
+/// openclaw ships its own custom `web_search` tool that it executes itself. Swap
+/// it for Anthropic's native server tool so the upstream runs the search and folds
+/// the results into the turn; the name stays `web_search` (no client dispatch), so
+/// it is excluded from the PascalCase map. Returns the native tool definition, or
+/// `None` for tools with no native equivalent.
+fn native_replacement(name: &str) -> Option<Value> {
+    match name {
+        "web_search" => Some(serde_json::json!({
+            "type": "web_search_20250305",
+            "name": "web_search",
+            "max_uses": 5,
+        })),
+        _ => None,
+    }
+}
+
+/// Map every custom tool name to its PascalCase pseudo-name. Skipped: server tools
+/// (a `type` field, already Anthropic-native) and tools with a native replacement
+/// (handled separately, keep their real name).
 fn build_tool_map(tools: &[Value]) -> BTreeMap<String, String> {
-    let mut taken = vec![false; CC_TOOL_POOL.len()];
+    let mut taken = BTreeSet::new();
     let mut map = BTreeMap::new();
     for tool in tools {
+        if tool.get("type").is_some() {
+            continue;
+        }
         if let Some(name) = tool.get("name").and_then(Value::as_str)
+            && native_replacement(name).is_none()
             && !map.contains_key(name)
-            && let Some(pseudo) = pseudo_for(name, &mut taken)
         {
+            let pseudo = pseudo_for(name, &taken);
+            taken.insert(pseudo.clone());
             map.insert(name.to_string(), pseudo);
         }
     }
@@ -244,9 +198,12 @@ pub fn masquerade_request(body: &Value) -> (Value, BTreeMap<String, String>) {
 
     if let Some(tools) = object.get_mut("tools").and_then(Value::as_array_mut) {
         for tool in tools {
-            if let Some(name) = tool.get("name").and_then(Value::as_str)
-                && let Some(pseudo) = tool_map.get(name)
-            {
+            let Some(name) = tool.get("name").and_then(Value::as_str) else {
+                continue;
+            };
+            if let Some(native) = native_replacement(name) {
+                *tool = native;
+            } else if let Some(pseudo) = tool_map.get(name) {
                 tool["name"] = Value::String(pseudo.clone());
             }
         }

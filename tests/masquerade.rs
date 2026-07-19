@@ -13,7 +13,7 @@ fn fixture() -> Value {
 }
 
 #[test]
-fn tool_names_are_mapped_deterministically_and_bijectively() {
+fn tool_names_are_pascalcased_deterministically_and_bijectively() {
     let body = fixture();
     let original: Vec<String> = body["tools"]
         .as_array()
@@ -25,35 +25,58 @@ fn tool_names_are_mapped_deterministically_and_bijectively() {
     let (out1, rev1) = masquerade_request(&body);
     let (out2, _rev2) = masquerade_request(&body);
 
-    let mapped1: Vec<String> = out1["tools"]
-        .as_array()
-        .unwrap()
+    let tools1 = out1["tools"].as_array().unwrap();
+    let tools2 = out2["tools"].as_array().unwrap();
+    let mapped1: Vec<String> = tools1
         .iter()
         .map(|t| t["name"].as_str().unwrap().to_string())
         .collect();
-    let mapped2: Vec<String> = out2["tools"]
-        .as_array()
-        .unwrap()
+    let mapped2: Vec<String> = tools2
         .iter()
         .map(|t| t["name"].as_str().unwrap().to_string())
         .collect();
 
-    // deterministic: same input → same mapped names
+    // deterministic: same input → same output
     assert_eq!(mapped1, mapped2, "mapping must be deterministic");
-    // bijective: distinct originals → distinct mapped
-    let uniq: std::collections::BTreeSet<_> = mapped1.iter().collect();
-    assert_eq!(uniq.len(), mapped1.len(), "mapped names must be unique");
-    // none of the openclaw names survive
-    for name in &mapped1 {
-        assert!(
-            !original.contains(name),
-            "openclaw name leaked into output: {name}"
+
+    // openclaw's web_search is swapped to Anthropic's native server tool; its name
+    // stays but it now carries the server-tool `type`.
+    let ws = tools1
+        .iter()
+        .find(|t| t["name"] == "web_search")
+        .expect("web_search present");
+    assert_eq!(ws["type"], "web_search_20250305", "web_search → native");
+
+    // every other tool is PascalCased and reverses back to the openclaw name
+    for (orig, tool) in original.iter().zip(tools1.iter()) {
+        let mapped = tool["name"].as_str().unwrap();
+        if orig == "web_search" {
+            continue;
+        }
+        assert_eq!(mapped, &pascal(orig), "{orig} must PascalCase to {mapped}");
+        assert_eq!(
+            &restore_tool_name(mapped, &rev1),
+            orig,
+            "reverse round-trips"
         );
     }
-    // reverse map round-trips
-    for (orig, mapped) in original.iter().zip(mapped1.iter()) {
-        assert_eq!(&restore_tool_name(mapped, &rev1), orig);
-    }
+
+    // renamed names are unique (bijective)
+    let renamed: Vec<&String> = mapped1.iter().filter(|n| *n != "web_search").collect();
+    let uniq: std::collections::BTreeSet<_> = renamed.iter().collect();
+    assert_eq!(uniq.len(), renamed.len(), "renamed names must be unique");
+}
+
+fn pascal(name: &str) -> String {
+    name.split(['_', '-', ' ', '.'])
+        .filter(|p| !p.is_empty())
+        .map(|p| {
+            let mut c = p.chars();
+            c.next()
+                .map(|f| f.to_uppercase().collect::<String>() + c.as_str())
+                .unwrap_or_default()
+        })
+        .collect()
 }
 
 #[test]
