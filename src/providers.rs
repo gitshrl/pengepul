@@ -59,9 +59,6 @@ impl ProviderRegistry {
         if codex_matches_model(&resolved) {
             return codex;
         }
-        if anthropic_matches_model(&resolved) {
-            return anthropic;
-        }
         anthropic
     }
 }
@@ -138,15 +135,8 @@ static CODEX_MODEL: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)^(gpt-5(\.|-)|gpt-5$|o\d|codex-)").expect("valid codex model regex")
 });
 
-static ANTHROPIC_MODEL: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)^claude-").expect("valid anthropic model regex"));
-
 fn codex_matches_model(model: &str) -> bool {
     CODEX_MODEL.is_match(model)
-}
-
-fn anthropic_matches_model(model: &str) -> bool {
-    ANTHROPIC_MODEL.is_match(model)
 }
 
 #[cfg(test)]
