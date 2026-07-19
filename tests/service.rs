@@ -24,7 +24,7 @@ fn render_systemd_unit_uses_pengepul_serve_with_custom_host_port() {
         port: Some(8318),
     });
 
-    assert!(unit.contains(&format!("Description={SYSTEMD_UNIT_NAME} API relay")));
+    assert!(unit.contains("Description=pengepul API relay"));
     assert!(unit.contains(
         "ExecStart=/home/dev/.local/bin/pengepul serve --config /home/dev/.pengepul/config.yaml --host 127.0.0.1 --port 8318"
     ));
@@ -159,5 +159,21 @@ fn install_launchd_service_writes_plist_and_bootstraps_when_started() {
             "gui/501".to_string(),
             path.to_string_lossy().into_owned(),
         ]]
+    );
+}
+
+#[test]
+fn systemd_exec_start_quotes_paths_containing_spaces() {
+    let unit = render_systemd_unit(&ServiceOptions {
+        executable: Path::new("/home/dev/My Apps/pengepul").to_path_buf(),
+        config_path: Some(Path::new("/home/dev/My Apps/config.yaml").to_path_buf()),
+        host: Some("127.0.0.1".to_string()),
+        port: Some(8318),
+    });
+
+    // systemd splits on whitespace, so a spaced path must arrive as one argument.
+    assert!(
+        unit.contains("ExecStart=\"/home/dev/My Apps/pengepul\" serve --config \"/home/dev/My Apps/config.yaml\" --host 127.0.0.1 --port 8318"),
+        "spaced paths must be quoted, unspaced args left bare:\n{unit}"
     );
 }

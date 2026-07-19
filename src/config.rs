@@ -168,7 +168,7 @@ pub fn load_config(
             RawConfig::default()
         } else {
             serde_yaml::from_str::<RawConfig>(&text)
-                .with_context(|| format!("{} must contain a YAML mapping", read_path.display()))?
+                .with_context(|| format!("invalid config {}", read_path.display()))?
         }
     } else {
         RawConfig::default()

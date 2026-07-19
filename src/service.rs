@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
 
@@ -40,9 +39,22 @@ pub fn build_service_command(options: &ServiceOptions) -> Vec<String> {
 
 #[must_use]
 pub fn render_systemd_unit(options: &ServiceOptions) -> String {
-    let exec_start = build_service_command(options).join(" ");
+    // systemd splits ExecStart on whitespace, so an install path containing a
+    // space would otherwise arrive as two arguments. Only such arguments are
+    // quoted, leaving the common unit file unadorned.
+    let exec_start = build_service_command(options)
+        .iter()
+        .map(|arg| {
+            if arg.contains([' ', '"', '\\']) {
+                format!("\"{}\"", arg.replace('\\', "\\\\").replace('"', "\\\""))
+            } else {
+                arg.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
     format!(
-        "[Unit]\nDescription={SYSTEMD_UNIT_NAME} API relay\nAfter=network-online.target\n\n[Service]\nType=simple\nExecStart={exec_start}\nRestart=on-failure\nRestartSec=3\n\n[Install]\nWantedBy=default.target\n"
+        "[Unit]\nDescription=pengepul API relay\nAfter=network-online.target\n\n[Service]\nType=simple\nExecStart={exec_start}\nRestart=on-failure\nRestartSec=3\n\n[Install]\nWantedBy=default.target\n"
     )
 }
 
@@ -192,9 +204,4 @@ fn run(runner: &mut impl FnMut(&[String]) -> Result<ExitStatus>, command: &[&str
         bail!("{} exited with {}", command.join(" "), status);
     }
     Ok(())
-}
-
-#[allow(dead_code)]
-fn plist_roundtrip(payload: &str) -> Result<plist::Value> {
-    plist::Value::from_reader_xml(Cursor::new(payload)).context("failed to parse plist")
 }
