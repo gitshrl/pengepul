@@ -121,6 +121,8 @@ const BOT_SECTION_KEYWORDS: &[&str] = &[
     "allowlisted senders",
     "inbound context",
     "trusted metadata",
+    "assistant output",
+    "output directives",
 ];
 
 fn is_bot_heading(line: &str) -> bool {
