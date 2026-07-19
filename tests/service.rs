@@ -153,12 +153,62 @@ fn install_launchd_service_writes_plist_and_bootstraps_when_started() {
     );
     assert_eq!(
         commands,
-        [[
-            "launchctl".to_string(),
-            "bootstrap".to_string(),
-            "gui/501".to_string(),
-            path.to_string_lossy().into_owned(),
-        ]]
+        [
+            vec![
+                "launchctl".to_string(),
+                "bootout".to_string(),
+                "gui/501/dev.gitshrl.pengepul".to_string(),
+            ],
+            vec![
+                "launchctl".to_string(),
+                "bootstrap".to_string(),
+                "gui/501".to_string(),
+                path.to_string_lossy().into_owned(),
+            ],
+            vec![
+                "launchctl".to_string(),
+                "kickstart".to_string(),
+                "gui/501/dev.gitshrl.pengepul".to_string(),
+            ],
+        ]
+    );
+}
+
+#[test]
+fn install_launchd_service_bootstraps_even_without_start() {
+    // launchd has no daemon-reload: without a bootstrap here, every later
+    // kickstart/bootout/print reports "Could not find service".
+    let tmp = tempdir().expect("tempdir");
+    let mut commands = Vec::<Vec<String>>::new();
+
+    install_launchd_service(
+        &ServiceOptions {
+            executable: "/Users/dev/.local/bin/pengepul".into(),
+            config_path: None,
+            host: None,
+            port: None,
+        },
+        tmp.path(),
+        501,
+        false,
+        |command| {
+            commands.push(command.to_vec());
+            Ok(success_status())
+        },
+    )
+    .expect("install launchd");
+
+    assert!(
+        commands
+            .iter()
+            .any(|c| c.get(1).map(String::as_str) == Some("bootstrap")),
+        "the service must be loaded even when not started: {commands:?}"
+    );
+    assert!(
+        commands
+            .iter()
+            .all(|c| c.get(1).map(String::as_str) != Some("kickstart")),
+        "without --start nothing should be kickstarted: {commands:?}"
     );
 }
 

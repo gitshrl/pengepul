@@ -561,6 +561,21 @@ fn install_platform_service(
 fn control_platform_service(action: &str) -> Result<()> {
     let uid = current_uid()?;
     let target = format!("gui/{uid}/{}", crate::service::LAUNCHD_LABEL);
+    // `stop` boots the service out of launchd, since the plist sets KeepAlive and a
+    // killed process is relaunched. Loading it again is therefore part of starting.
+    if matches!(action, "start" | "restart") {
+        let plist = launchd_plist_path()?;
+        if !plist.is_file() {
+            bail!(
+                "{} is missing; run `pengepul service install` first",
+                plist.display()
+            );
+        }
+        // Fails when already loaded, which is the common case and not an error.
+        let _ = std::process::Command::new("launchctl")
+            .args(["bootstrap", &format!("gui/{uid}"), &plist.to_string_lossy()])
+            .status();
+    }
     let command = match action {
         "start" => vec!["launchctl", "kickstart", &target],
         "stop" => vec!["launchctl", "bootout", &target],
@@ -579,11 +594,21 @@ fn control_platform_service(action: &str) -> Result<()> {
 #[cfg(target_os = "macos")]
 fn platform_service_status() -> Result<String> {
     let uid = current_uid()?;
+    if !launchd_plist_path()?.is_file() {
+        bail!("no service installed; run `pengepul service install`");
+    }
     command_output(&[
         "launchctl",
         "print",
         &format!("gui/{uid}/{}", crate::service::LAUNCHD_LABEL),
     ])
+}
+
+#[cfg(target_os = "macos")]
+fn launchd_plist_path() -> Result<PathBuf> {
+    Ok(home_dir()?
+        .join("Library/LaunchAgents")
+        .join(format!("{}.plist", crate::service::LAUNCHD_LABEL)))
 }
 
 #[cfg(target_os = "macos")]

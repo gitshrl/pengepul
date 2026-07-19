@@ -164,16 +164,19 @@ pub fn install_launchd_service(
     )?;
     fs::write(&path, payload).with_context(|| format!("failed to write {}", path.display()))?;
 
+    // launchd has no daemon-reload. A service must be bootstrapped (loaded) before
+    // kickstart, bootout or print will find it, and bootstrapping one that is
+    // already loaded fails, so an existing copy is unloaded first. Without this,
+    // every later `service` command reports "Could not find service".
+    let domain = format!("gui/{uid}");
+    let target = format!("{domain}/{LAUNCHD_LABEL}");
+    let _ = runner(&["launchctl", "bootout", &target].map(String::from));
+    run(
+        &mut runner,
+        &["launchctl", "bootstrap", &domain, &path.to_string_lossy()],
+    )?;
     if start {
-        run(
-            &mut runner,
-            &[
-                "launchctl",
-                "bootstrap",
-                &format!("gui/{uid}"),
-                &path.to_string_lossy(),
-            ],
-        )?;
+        run(&mut runner, &["launchctl", "kickstart", &target])?;
     }
     Ok(path)
 }
