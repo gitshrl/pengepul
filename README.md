@@ -173,16 +173,15 @@ frameworks that route their native Anthropic traffic through pengepul:
 ### openclaw
 
 The embedded runner talks native Anthropic Messages. In `~/.openclaw/openclaw.json`,
-define the `anthropic` provider against pengepul and select it with an `anthropic/`
-prefixed model (a bare `claude-…` resolves to the claude-cli backend and bypasses
-pengepul):
+register a `pengepul` provider and select it with a `pengepul/` prefixed model (a
+bare `claude-…` resolves to the claude-cli backend and bypasses pengepul):
 
 ```json
 {
-  "agents": { "defaults": { "model": { "primary": "anthropic/claude-opus-4-8" } } },
+  "agents": { "defaults": { "model": { "primary": "pengepul/claude-opus-4-8" } } },
   "models": {
     "providers": {
-      "anthropic": {
+      "pengepul": {
         "baseUrl": "http://127.0.0.1:8317",
         "apiKey": "<pengepul api-key>",
         "auth": "api-key",
