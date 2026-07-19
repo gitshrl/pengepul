@@ -214,9 +214,9 @@ model:
   default: claude-opus-4-8
 providers:
   pengepul:
-    base_url: http://127.0.0.1:8317    # ROOT — the Anthropic SDK appends /v1/messages
-    api_mode: anthropic_messages         # explicit → native Messages wire, no /anthropic suffix
-    api_key: <pengepul api-key>          # sent as x-api-key verbatim; a plain sk-local-/pgpl- key is fine
+    base_url: http://127.0.0.1:8317 # ROOT — the Anthropic SDK appends /v1/messages
+    api_mode: anthropic_messages # explicit → native Messages wire, no /anthropic suffix
+    api_key: <pengepul api-key> # sent as x-api-key verbatim; a plain sk-local-/pgpl- key is fine
 ```
 
 - `api_mode: anthropic_messages` forces the native wire on a root `base_url`, so no
