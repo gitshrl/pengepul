@@ -239,10 +239,9 @@ pub fn apply_cloaking(
     let Some(object) = next_body.as_object_mut() else {
         return next_body;
     };
-    let existing = object
-        .get("system")
-        .cloned()
-        .unwrap_or(Value::Array(Vec::new()));
+    // Taken, not copied: the entry is rebuilt and re-inserted below, and the
+    // system block is the largest field in the request.
+    let existing = object.remove("system").unwrap_or(Value::Array(Vec::new()));
     let remaining = match existing {
         Value::Array(values) => values,
         Value::Null => Vec::new(),
