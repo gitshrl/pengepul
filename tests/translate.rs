@@ -490,3 +490,71 @@ fn responses_web_search_queries_translate_to_anthropic_message() {
         }])
     );
 }
+
+#[test]
+fn responses_assistant_output_text_survives_translation_to_anthropic() {
+    // A prior assistant turn in a Responses conversation carries `output_text`.
+    let out = responses_to_anthropic(&json!({
+        "model": "sonnet",
+        "input": [
+            {"role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+            {"role": "assistant", "content": [{"type": "output_text", "text": "hello there"}]},
+            {"role": "user", "content": [{"type": "input_text", "text": "again"}]}
+        ]
+    }));
+
+    let assistant = &out["messages"][1];
+    assert_eq!(assistant["role"], "assistant");
+    assert_ne!(
+        assistant["content"],
+        json!(""),
+        "assistant turn must not be erased"
+    );
+    assert_eq!(assistant["content"][0]["text"], "hello there");
+}
+
+#[test]
+fn responses_roleless_items_are_dropped_not_turned_into_user_text() {
+    // reasoning / web_search_call items have no role and no chat equivalent.
+    let out = responses_to_anthropic(&json!({
+        "model": "sonnet",
+        "input": [
+            {"role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+            {"type": "reasoning", "id": "rs_1", "summary": [{"type": "summary_text", "text": "thinking"}]},
+            {"type": "web_search_call", "id": "ws_1", "status": "completed"}
+        ]
+    }));
+
+    let messages = out["messages"].as_array().expect("messages array");
+    for m in messages {
+        let text = m["content"].to_string();
+        assert!(
+            !text.contains("web_search_call") && !text.contains("\"reasoning\""),
+            "raw item JSON must not be injected as a user turn: {text}"
+        );
+    }
+}
+
+#[test]
+fn chat_image_content_converts_to_responses_input_parts() {
+    let out = chat_to_responses_request(&json!({
+        "model": "gpt-5.4",
+        "messages": [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "what is this"},
+                {"type": "image_url", "image_url": {"url": "https://example.com/a.png"}}
+            ]
+        }]
+    }));
+
+    let parts = out["input"][0]["content"]
+        .as_array()
+        .expect("content array");
+    assert_eq!(parts[0]["type"], "input_text", "chat text -> input_text");
+    assert_eq!(parts[1]["type"], "input_image", "chat image -> input_image");
+    assert_eq!(
+        parts[1]["image_url"], "https://example.com/a.png",
+        "responses wants a flat url string"
+    );
+}

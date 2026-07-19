@@ -29,7 +29,6 @@ pub fn openai_to_anthropic(body: &Value) -> Value {
         "model".to_string(),
         Value::String(resolve_model(body.get("model").and_then(Value::as_str))),
     );
-    out.insert("messages".to_string(), Value::Array(Vec::new()));
     out.insert(
         "max_tokens".to_string(),
         body.get("max_completion_tokens")
@@ -284,8 +283,9 @@ pub fn anthropic_to_openai(payload: &Value, model: &str) -> Value {
     }
 
     let mut message = json!({"role": "assistant", "content": text_parts.join("")});
-    if !tool_calls.is_empty() {
-        message["tool_calls"] = Value::Array(tool_calls.clone());
+    let has_tool_calls = !tool_calls.is_empty();
+    if has_tool_calls {
+        message["tool_calls"] = Value::Array(tool_calls);
     }
 
     json!({
@@ -296,7 +296,7 @@ pub fn anthropic_to_openai(payload: &Value, model: &str) -> Value {
         "choices": [{
             "index": 0,
             "message": message,
-            "finish_reason": finish_reason(payload.get("stop_reason").and_then(Value::as_str), !tool_calls.is_empty())
+            "finish_reason": finish_reason(payload.get("stop_reason").and_then(Value::as_str), has_tool_calls)
         }],
         "usage": usage_to_openai(payload.get("usage").unwrap_or(&Value::Null))
     })
@@ -337,7 +337,7 @@ pub fn chat_to_responses_request(body: &Value) -> Value {
             }
             Some(message_role @ ("user" | "assistant")) => input.push(json!({
                 "role": message_role,
-                "content": message.get("content").cloned().unwrap_or_else(|| json!(""))
+                "content": chat_content_to_responses(message.get("content"))
             })),
             _ => {}
         }
@@ -392,7 +392,6 @@ pub fn chat_to_responses_request(body: &Value) -> Value {
 pub fn anthropic_to_responses_request(body: &Value) -> Value {
     let mut out = Map::new();
     insert_if_some(&mut out, "model", body.get("model").cloned());
-    out.insert("input".to_string(), Value::Array(Vec::new()));
     copy_if_present(body, &mut out, "stream");
     if let Some(max_tokens) = body.get("max_tokens") {
         out.insert("max_output_tokens".to_string(), max_tokens.clone());
@@ -522,8 +521,9 @@ pub fn responses_to_chat_completion(payload: &Value, model: &str) -> Value {
     if !reasoning.is_empty() {
         message["reasoning_content"] = Value::String(reasoning);
     }
-    if !tool_calls.is_empty() {
-        message["tool_calls"] = Value::Array(tool_calls.clone());
+    let has_tool_calls = !tool_calls.is_empty();
+    if has_tool_calls {
+        message["tool_calls"] = Value::Array(tool_calls);
     }
 
     let usage = payload.get("usage").unwrap_or(&Value::Null);
@@ -537,7 +537,7 @@ pub fn responses_to_chat_completion(payload: &Value, model: &str) -> Value {
         "choices": [{
             "index": 0,
             "message": message,
-            "finish_reason": if !tool_calls.is_empty() {
+            "finish_reason": if has_tool_calls {
                 "tool_calls"
             } else if payload.get("status").and_then(Value::as_str) == Some("incomplete") {
                 "length"
@@ -711,7 +711,7 @@ fn openai_content_to_anthropic(content: &Value) -> Value {
                     continue;
                 };
                 match item_type {
-                    "text" | "input_text" => {
+                    "text" | "input_text" | "output_text" => {
                         blocks.push(json!({"type": "text", "text": item.get("text").cloned().unwrap_or_else(|| json!(""))}));
                     }
                     "image_url" | "input_image" => {
@@ -732,6 +732,32 @@ fn openai_content_to_anthropic(content: &Value) -> Value {
         }
         other => Value::String(other.to_string()),
     }
+}
+
+/// Convert `OpenAI` Chat content parts to their Responses equivalents.
+///
+/// Chat says `text`/`image_url` with a nested `{url}`; Responses wants
+/// `input_text`/`input_image` with a flat url string. A plain string passes
+/// through, since both APIs accept one.
+fn chat_content_to_responses(content: Option<&Value>) -> Value {
+    let Some(parts) = content.and_then(Value::as_array) else {
+        return content.cloned().unwrap_or_else(|| json!(""));
+    };
+    let converted: Vec<Value> = parts
+        .iter()
+        .map(|part| match part.get("type").and_then(Value::as_str) {
+            Some("image_url" | "input_image") => json!({
+                "type": "input_image",
+                "image_url": image_url_value(part.get("image_url"))
+            }),
+            Some("text" | "input_text" | "output_text") => json!({
+                "type": "input_text",
+                "text": part.get("text").cloned().unwrap_or_else(|| json!(""))
+            }),
+            _ => part.clone(),
+        })
+        .collect();
+    Value::Array(converted)
 }
 
 fn image_url_value(value: Option<&Value>) -> String {
@@ -981,7 +1007,10 @@ fn responses_input_to_openai_messages(input_items: &Value) -> Vec<Value> {
                 "tool_call_id": item.get("call_id").cloned().unwrap_or(Value::Null),
                 "content": item.get("output").cloned().unwrap_or_else(|| json!(""))
             })),
-            _ => messages.push(json!({"role": "user", "content": item.to_string()})),
+            // reasoning, web_search_call and friends have no chat equivalent.
+            // Serializing them into a user turn attributes machine JSON to the
+            // user and inflates the prompt, so they are dropped.
+            _ => {}
         }
     }
     messages
