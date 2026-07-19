@@ -515,7 +515,9 @@ async fn models(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let has_opencode = state.account_managers.opencode.lock().await.account_count() > 0;
     let mut models = [
         (ProviderKind::Anthropic, "claude-sonnet-4-6"),
+        (ProviderKind::Anthropic, "claude-sonnet-5"),
         (ProviderKind::Anthropic, "claude-opus-4-8"),
+        (ProviderKind::Anthropic, "claude-fable-5"),
         (ProviderKind::Codex, "gpt-5.4"),
     ]
     .into_iter()
