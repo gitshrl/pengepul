@@ -1,6 +1,7 @@
 # 2. Rename openclaw's tool names on the wire, reverse them on the way back
 
-Status: Accepted
+Status: Accepted (amended by ADR-0005 — multi-word tool names are now also renamed
+in the prompt prose, not only the tool listing)
 
 ## Context
 

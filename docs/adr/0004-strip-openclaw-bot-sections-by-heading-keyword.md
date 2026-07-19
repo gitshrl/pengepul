@@ -1,6 +1,7 @@
 # 4. Strip openclaw bot sections by heading keyword, and leave the persona name alone
 
-Status: Accepted
+Status: Accepted (amended by ADR-0005 — the keyword set is narrowed to the two
+sections that actually trip; the categories named below are no longer stripped)
 
 ## Context
 
