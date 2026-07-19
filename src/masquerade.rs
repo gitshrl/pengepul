@@ -5,10 +5,10 @@
 //! and a bot-persona system prompt; the classifier flags both as a third-party
 //! bridge and routes the request to extra-usage billing (a hard 400 on
 //! overage-disabled orgs). The trigger is naming *style*, not vocabulary: the
-//! classifier accepts PascalCase, coding-assistant-looking tool names and rejects
-//! openclaw's snake_case ones (verified against the live classifier — `Exec`,
+//! classifier accepts `PascalCase`, coding-assistant-looking tool names and rejects
+//! openclaw's `snake_case` ones (verified against the live classifier — `Exec`,
 //! `CreateGoal`, `Subagents` all pass; `exec`, `create_goal` all trip). So each
-//! tool name is PascalCased, preserving its meaning, and the bot-identity sections
+//! tool name is `PascalCase`, preserving its meaning, and the bot-identity sections
 //! are stripped from the system prompt. Server tools (a `type` field, e.g.
 //! `web_search_20250305`) are left untouched so Anthropic still executes them. The
 //! mapping is deterministic so multi-turn history stays consistent, and the reverse
@@ -59,7 +59,7 @@ fn heading_level(line: &str) -> Option<usize> {
     }
 }
 
-/// PascalCase a snake/kebab/space-delimited tool name (`web_search` → `WebSearch`).
+/// `PascalCase` a snake/kebab/space-delimited tool name (`web_search` → `WebSearch`).
 /// A leading digit or empty result falls back to `Tool` so the name always looks
 /// like an identifier.
 fn pascal_case(name: &str) -> String {
@@ -78,7 +78,7 @@ fn pascal_case(name: &str) -> String {
     }
 }
 
-/// PascalCase the name; if two distinct tools collapse to the same PascalCase
+/// `PascalCase` the name; if two distinct tools collapse to the same `PascalCase`
 /// (`a_b` and `ab` both → `Ab`), append the smallest free numeric suffix so the
 /// map stays bijective and the reverse map round-trips.
 fn pseudo_for(name: &str, taken: &BTreeSet<String>) -> String {
@@ -86,7 +86,9 @@ fn pseudo_for(name: &str, taken: &BTreeSet<String>) -> String {
     if !taken.contains(&base) {
         return base;
     }
-    (2..)
+    // At most `taken.len()` prior names can collide, so a free suffix exists within
+    // that range; the bound also keeps the search provably terminating.
+    (2..=taken.len() + 2)
         .map(|n| format!("{base}{n}"))
         .find(|candidate| !taken.contains(candidate))
         .unwrap_or(base)
@@ -95,7 +97,7 @@ fn pseudo_for(name: &str, taken: &BTreeSet<String>) -> String {
 /// openclaw ships its own custom `web_search` tool that it executes itself. Swap
 /// it for Anthropic's native server tool so the upstream runs the search and folds
 /// the results into the turn; the name stays `web_search` (no client dispatch), so
-/// it is excluded from the PascalCase map. Returns the native tool definition, or
+/// it is excluded from the `PascalCase` map. Returns the native tool definition, or
 /// `None` for tools with no native equivalent.
 fn native_replacement(name: &str) -> Option<Value> {
     match name {
@@ -108,7 +110,7 @@ fn native_replacement(name: &str) -> Option<Value> {
     }
 }
 
-/// Map every custom tool name to its PascalCase pseudo-name. Skipped: server tools
+/// Map every custom tool name to its `PascalCase` pseudo-name. Skipped: server tools
 /// (a `type` field, already Anthropic-native) and tools with a native replacement
 /// (handled separately, keep their real name).
 fn build_tool_map(tools: &[Value]) -> BTreeMap<String, String> {
