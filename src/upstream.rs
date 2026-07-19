@@ -163,26 +163,59 @@ pub fn detect_classifier_tripping_in_messages(body: &Value) -> bool {
     body.get("messages").is_some_and(contains_sentence)
 }
 
-/// Strip `cache_control` from all but the last `max` marked blocks so the request
-/// stays under Anthropic's cache-breakpoint limit (4). A `None`/non-array system is
-/// left untouched. The last markers are kept because later blocks cache the most
-/// content; earlier ones (our injected prefix) are the cheapest to drop.
-fn cap_cache_control(system: &mut Value, max: usize) {
-    let Value::Array(blocks) = system else {
-        return;
-    };
-    let marked: Vec<usize> = blocks
-        .iter()
-        .enumerate()
-        .filter(|(_, block)| block.get("cache_control").is_some())
-        .map(|(index, _)| index)
-        .collect();
-    if marked.len() <= max {
+/// Keep a request under Anthropic's limit of `max` (4) `cache_control` breakpoints,
+/// which are summed across `system`, `tools`, AND every message's `content`. The
+/// client (e.g. hermes) may already spend its full budget there; our injected
+/// prefix would push it over. Strip the earliest markers first — our prefix is the
+/// first `cache_control` block in `system` — so the client's later, larger-prefix
+/// breakpoints survive.
+fn cap_cache_control(object: &mut serde_json::Map<String, Value>, max: usize) {
+    fn count(value: Option<&Value>) -> usize {
+        value.and_then(Value::as_array).map_or(0, |blocks| {
+            blocks
+                .iter()
+                .filter(|block| block.get("cache_control").is_some())
+                .count()
+        })
+    }
+    fn strip(value: Option<&mut Value>, remaining: &mut usize) {
+        if *remaining == 0 {
+            return;
+        }
+        let Some(blocks) = value.and_then(Value::as_array_mut) else {
+            return;
+        };
+        for block in blocks.iter_mut() {
+            if *remaining == 0 {
+                break;
+            }
+            if let Some(object) = block.as_object_mut()
+                && object.remove("cache_control").is_some()
+            {
+                *remaining -= 1;
+            }
+        }
+    }
+
+    let mut total = count(object.get("system")) + count(object.get("tools"));
+    if let Some(messages) = object.get("messages").and_then(Value::as_array) {
+        for message in messages {
+            total += count(message.get("content"));
+        }
+    }
+    if total <= max {
         return;
     }
-    for &index in &marked[..marked.len() - max] {
-        if let Some(object) = blocks[index].as_object_mut() {
-            object.remove("cache_control");
+
+    let mut remaining = total - max;
+    strip(object.get_mut("system"), &mut remaining);
+    strip(object.get_mut("tools"), &mut remaining);
+    if let Some(messages) = object.get_mut("messages").and_then(Value::as_array_mut) {
+        for message in messages.iter_mut() {
+            if remaining == 0 {
+                break;
+            }
+            strip(message.get_mut("content"), &mut remaining);
         }
     }
 }
@@ -267,9 +300,7 @@ pub fn apply_cloaking(
     // may already spend its full budget (e.g. hermes marks 4); the injected prefix
     // would make 5. Keep the last 4 cache breakpoints (the client's, which cache the
     // most content) and drop the earlier ones (our prefix) so the total stays valid.
-    if let Some(system) = object.get_mut("system") {
-        cap_cache_control(system, 4);
-    }
+    cap_cache_control(object, 4);
 
     let session = header_value(request_headers, "x-claude-code-session-id").map_or_else(
         || {

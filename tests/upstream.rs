@@ -129,21 +129,19 @@ fn apply_cloaking_injects_billing_prefix_and_metadata() {
 }
 
 #[test]
-fn apply_cloaking_caps_cache_control_at_four() {
-    // A client (e.g. hermes) may already spend the full 4 cache_control budget; the
-    // injected first-party prefix would make 5, which Anthropic rejects with 400.
-    let system: Vec<Value> = (0..4)
-        .map(|i| {
-            json!({
-                "type": "text",
-                "text": format!("client block {i}"),
-                "cache_control": {"type": "ephemeral"}
-            })
-        })
-        .collect();
+fn apply_cloaking_caps_cache_control_at_four_across_system_tools_messages() {
+    // Anthropic sums cache_control across system + tools + messages. A client (e.g.
+    // hermes on a follow-up turn) spends the full budget of 4 spread across all three;
+    // the injected first-party prefix would make 5, a hard 400. Verify the total is
+    // capped to 4 and the client's breakpoints survive (our prefix is dropped).
+    let cc = json!({"type": "ephemeral"});
     let body = json!({
-        "messages": [{"role": "user", "content": "hi"}],
-        "system": system
+        "system": [{"type": "text", "text": "sys", "cache_control": cc}],
+        "tools": [{"name": "read_file", "description": "d", "input_schema": {}, "cache_control": cc}],
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "u", "cache_control": cc}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "a", "cache_control": cc}]}
+        ]
     });
 
     let cloaked = apply_cloaking(
@@ -152,20 +150,31 @@ fn apply_cloaking_caps_cache_control_at_four() {
         &account(ProviderId::anthropic()),
         &config(),
     );
-    let blocks = cloaked["system"].as_array().expect("system blocks");
 
-    let cc = blocks
-        .iter()
-        .filter(|b| b.get("cache_control").is_some())
-        .count();
-    assert_eq!(cc, 4, "cache_control blocks capped at 4, found {cc}");
-    // the client's four blocks (the last ones) keep their breakpoints; ours is dropped
-    for block in &blocks[blocks.len() - 4..] {
-        assert!(
-            block.get("cache_control").is_some(),
-            "client cache breakpoints preserved"
-        );
+    // count cache_control everywhere Anthropic does
+    let arr_cc = |v: &Value| {
+        v.as_array().map_or(0, |a| {
+            a.iter()
+                .filter(|b| b.get("cache_control").is_some())
+                .count()
+        })
+    };
+    let mut total = arr_cc(&cloaked["system"]) + arr_cc(&cloaked["tools"]);
+    for m in cloaked["messages"].as_array().unwrap() {
+        total += arr_cc(&m["content"]);
     }
+    assert_eq!(total, 4, "total cache_control capped at 4, found {total}");
+    // the injected prefix (first system block after billing) lost its cache_control;
+    // the client's tools/messages breakpoints are preserved
+    assert!(
+        arr_cc(&cloaked["tools"]) == 1 && arr_cc(&cloaked["messages"][0]["content"]) == 1,
+        "client tools/message breakpoints preserved"
+    );
+    let prefix_has_cc = cloaked["system"].as_array().unwrap().iter().any(|b| {
+        b["text"].as_str() == Some("You are Claude Code, Anthropic's official CLI for Claude.")
+            && b.get("cache_control").is_some()
+    });
+    assert!(!prefix_has_cc, "our prefix breakpoint dropped");
 }
 
 #[test]
