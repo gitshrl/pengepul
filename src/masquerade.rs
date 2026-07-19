@@ -203,6 +203,13 @@ fn replace_word(haystack: &str, word: &str, replacement: &str) -> String {
 /// preserved on an assistant turn that a `tool_result` immediately answers; every
 /// other (completed) assistant turn may omit it. So thinking is kept only when the
 /// next message carries a `tool_result`, and stripped otherwise.
+fn is_thinking_block(block: &Value) -> bool {
+    matches!(
+        block.get("type").and_then(Value::as_str),
+        Some("thinking" | "redacted_thinking")
+    )
+}
+
 fn strip_orphan_thinking(messages: &mut Value) {
     let Some(list) = messages.as_array_mut() else {
         return;
@@ -224,12 +231,12 @@ fn strip_orphan_thinking(messages: &mut Value) {
             continue;
         }
         if let Some(content) = message.get_mut("content").and_then(Value::as_array_mut) {
-            content.retain(|b| {
-                !matches!(
-                    b.get("type").and_then(Value::as_str),
-                    Some("thinking" | "redacted_thinking")
-                )
-            });
+            // An assistant turn with zero blocks is rejected upstream, so a turn
+            // that is nothing but thinking keeps it.
+            if content.iter().all(is_thinking_block) {
+                continue;
+            }
+            content.retain(|b| !is_thinking_block(b));
         }
     }
 }
@@ -271,15 +278,32 @@ pub fn masquerade_request(body: &Value) -> (Value, BTreeMap<String, String>) {
 
     if let Some(tools) = object.get_mut("tools").and_then(Value::as_array_mut) {
         for tool in tools {
+            // A tool carrying `type` is already an Anthropic server tool; replacing
+            // it would discard the caller's own configuration.
+            let already_native = tool.get("type").is_some();
             let Some(name) = tool.get("name").and_then(Value::as_str) else {
                 continue;
             };
+            if already_native {
+                continue;
+            }
             if let Some(native) = native_replacement(name) {
                 *tool = native;
             } else if let Some(pseudo) = tool_map.get(name) {
                 tool["name"] = Value::String(pseudo.clone());
             }
         }
+    }
+
+    // A forced tool_choice names a tool; it has to follow the rename or the
+    // upstream rejects the request.
+    if let Some(choice) = object.get_mut("tool_choice").and_then(Value::as_object_mut)
+        && let Some(pseudo) = choice
+            .get("name")
+            .and_then(Value::as_str)
+            .and_then(|name| tool_map.get(name))
+    {
+        choice.insert("name".to_string(), Value::String(pseudo.clone()));
     }
 
     if let Some(system) = object.get_mut("system") {

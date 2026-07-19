@@ -333,3 +333,58 @@ fn restores_tool_use_names_in_response_body_and_sse_event() {
     );
     assert_eq!(untouched["content_block"]["name"], "Read");
 }
+
+#[test]
+fn thinking_only_assistant_turn_is_not_emptied() {
+    // openclaw persists the thinking block but drops the server-tool blocks that
+    // sat beside it. Stripping the orphan would leave `content: []`, which
+    // Anthropic rejects with "at least one block is required".
+    let body = json!({
+        "messages": [
+            {"role": "user", "content": "search for it"},
+            {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "let me search", "signature": "sig1"}
+            ]},
+            {"role": "user", "content": "thanks"}
+        ]
+    });
+
+    let (out, _rev) = masquerade_request(&body);
+    let content = out["messages"][1]["content"].as_array().expect("array");
+    assert!(
+        !content.is_empty(),
+        "an assistant turn must never be left with zero content blocks"
+    );
+}
+
+#[test]
+fn forced_tool_choice_name_is_renamed_with_the_tools() {
+    let body = json!({
+        "tools": [{"name": "exec", "description": "run", "input_schema": {"type": "object"}}],
+        "tool_choice": {"type": "tool", "name": "exec"},
+        "messages": [{"role": "user", "content": "go"}]
+    });
+
+    let (out, _rev) = masquerade_request(&body);
+    let tool_name = out["tools"][0]["name"].as_str().unwrap();
+    assert_eq!(
+        out["tool_choice"]["name"], tool_name,
+        "tool_choice must name a tool that exists in the renamed tools array"
+    );
+}
+
+#[test]
+fn already_native_server_tool_keeps_its_configuration() {
+    // A client that sends Anthropic's native web_search itself must not have its
+    // settings replaced by the default swap.
+    let body = json!({
+        "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 25}],
+        "messages": [{"role": "user", "content": "go"}]
+    });
+
+    let (out, _rev) = masquerade_request(&body);
+    assert_eq!(
+        out["tools"][0]["max_uses"], 25,
+        "an already-native tool's config must survive"
+    );
+}
