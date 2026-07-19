@@ -129,6 +129,46 @@ fn apply_cloaking_injects_billing_prefix_and_metadata() {
 }
 
 #[test]
+fn apply_cloaking_caps_cache_control_at_four() {
+    // A client (e.g. hermes) may already spend the full 4 cache_control budget; the
+    // injected first-party prefix would make 5, which Anthropic rejects with 400.
+    let system: Vec<Value> = (0..4)
+        .map(|i| {
+            json!({
+                "type": "text",
+                "text": format!("client block {i}"),
+                "cache_control": {"type": "ephemeral"}
+            })
+        })
+        .collect();
+    let body = json!({
+        "messages": [{"role": "user", "content": "hi"}],
+        "system": system
+    });
+
+    let cloaked = apply_cloaking(
+        &body,
+        &BTreeMap::new(),
+        &account(ProviderId::anthropic()),
+        &config(),
+    );
+    let blocks = cloaked["system"].as_array().expect("system blocks");
+
+    let cc = blocks
+        .iter()
+        .filter(|b| b.get("cache_control").is_some())
+        .count();
+    assert_eq!(cc, 4, "cache_control blocks capped at 4, found {cc}");
+    // the client's four blocks (the last ones) keep their breakpoints; ours is dropped
+    for block in &blocks[blocks.len() - 4..] {
+        assert!(
+            block.get("cache_control").is_some(),
+            "client cache breakpoints preserved"
+        );
+    }
+}
+
+#[test]
 fn normalize_codex_responses_body_defaults_and_string_input() {
     let normalized = normalize_codex_responses_body(&json!({
         "model": "gpt-5.4",
