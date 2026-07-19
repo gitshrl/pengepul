@@ -515,8 +515,35 @@ pub fn anthropic_sse_to_chat(
             ),
             "data: [DONE]\n\n".to_string(),
         ],
+        // Anthropic stops sending after an error. Without a terminal chunk the
+        // client waits for a [DONE] that never arrives.
+        "error" => error_chunks(upstream_error(data.get("error"))),
         _ => Vec::new(),
     }
+}
+
+/// Extract a `{message, type}` pair from a vendor error object.
+fn upstream_error(error: Option<&Value>) -> (String, String) {
+    let message = error
+        .and_then(|error| error.get("message"))
+        .and_then(Value::as_str)
+        .unwrap_or("upstream error")
+        .to_string();
+    let kind = error
+        .and_then(|error| error.get("type").or_else(|| error.get("code")))
+        .and_then(Value::as_str)
+        .unwrap_or("api_error")
+        .to_string();
+    (message, kind)
+}
+
+/// Terminate an OpenAI-shaped stream with an error object rather than model text,
+/// so a client cannot mistake the failure for content.
+fn error_chunks((message, kind): (String, String)) -> Vec<String> {
+    vec![
+        sse(&json!({"error": {"message": message, "type": kind}}), None),
+        "data: [DONE]\n\n".to_string(),
+    ]
 }
 
 #[must_use]
@@ -989,6 +1016,11 @@ pub fn responses_sse_to_chat(
             chunks.push("data: [DONE]\n\n".to_string());
             chunks
         }
+        // Codex stops sending after a failure; terminate rather than truncate.
+        "response.failed" => error_chunks(upstream_error(
+            data.get("response")
+                .and_then(|response| response.get("error")),
+        )),
         _ => Vec::new(),
     }
 }
@@ -1001,19 +1033,15 @@ fn find_sse_separator(buffer: &str) -> Option<(usize, usize)> {
 }
 
 fn find_sse_separator_bytes(buffer: &[u8]) -> Option<(usize, usize)> {
-    [
-        b"\r\n\r\n".as_slice(),
-        b"\n\n".as_slice(),
-        b"\r\r".as_slice(),
-    ]
-    .into_iter()
-    .filter_map(|separator| {
-        buffer
-            .windows(separator.len())
-            .position(|window| window == separator)
-            .map(|index| (index, separator.len()))
+    buffer.iter().enumerate().find_map(|(index, byte)| {
+        let tail = &buffer[index..];
+        match byte {
+            b'\r' if tail.starts_with(b"\r\n\r\n") => Some((index, 4)),
+            b'\r' if tail.starts_with(b"\r\r") => Some((index, 2)),
+            b'\n' if tail.starts_with(b"\n\n") => Some((index, 2)),
+            _ => None,
+        }
     })
-    .min_by_key(|(index, _)| *index)
 }
 
 fn parse_event(raw: &str) -> Option<(String, String)> {

@@ -710,3 +710,45 @@ fn responses_stream_to_anthropic_uses_done_function_arguments_when_no_delta() {
         })
     );
 }
+
+#[test]
+fn anthropic_mid_stream_error_terminates_the_chat_stream() {
+    // Anthropic emits `event: error` and then stops. Without a terminal chunk an
+    // OpenAI-shaped client waits forever for [DONE].
+    let mut state = ChatStreamState::new("claude-sonnet-4-6");
+    let out = anthropic_sse_to_chat(
+        "error",
+        &json!({"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}),
+        &mut state,
+    );
+
+    let joined = out.join("");
+    assert!(
+        joined.contains("Overloaded"),
+        "error text must reach the client: {joined}"
+    );
+    assert!(
+        joined.contains("data: [DONE]"),
+        "stream must terminate with the sentinel: {joined}"
+    );
+}
+
+#[test]
+fn codex_response_failed_terminates_the_chat_stream() {
+    let mut state = ChatStreamState::new("gpt-5.4");
+    let out = responses_sse_to_chat(
+        "response.failed",
+        &json!({"response": {"error": {"code": "server_error", "message": "boom"}}}),
+        &mut state,
+    );
+
+    let joined = out.join("");
+    assert!(
+        joined.contains("boom"),
+        "error text must reach the client: {joined}"
+    );
+    assert!(
+        joined.contains("data: [DONE]"),
+        "stream must terminate with the sentinel: {joined}"
+    );
+}
