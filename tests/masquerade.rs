@@ -39,18 +39,31 @@ fn tool_names_are_pascalcased_deterministically_and_bijectively() {
     // deterministic: same input → same output
     assert_eq!(mapped1, mapped2, "mapping must be deterministic");
 
-    // openclaw's web_search is swapped to Anthropic's native server tool; its name
-    // stays but it now carries the server-tool `type`.
-    let ws = tools1
-        .iter()
-        .find(|t| t["name"] == "web_search")
-        .expect("web_search present");
-    assert_eq!(ws["type"], "web_search_20250305", "web_search → native");
+    // openclaw's web_search/web_fetch are swapped to Anthropic's native server
+    // tools; names stay but they now carry a server-tool `type`.
+    let native = |name: &str| {
+        tools1
+            .iter()
+            .find(|t| t["name"] == name)
+            .unwrap_or_else(|| panic!("{name} present"))["type"]
+            .clone()
+    };
+    assert_eq!(
+        native("web_search"),
+        "web_search_20250305",
+        "web_search → native"
+    );
+    assert_eq!(
+        native("web_fetch"),
+        "web_fetch_20250910",
+        "web_fetch → native"
+    );
 
     // every other tool is PascalCased and reverses back to the openclaw name
+    let swapped = ["web_search", "web_fetch"];
     for (orig, tool) in original.iter().zip(tools1.iter()) {
         let mapped = tool["name"].as_str().unwrap();
-        if orig == "web_search" {
+        if swapped.contains(&orig.as_str()) {
             continue;
         }
         assert_eq!(mapped, &pascal(orig), "{orig} must PascalCase to {mapped}");
@@ -62,7 +75,10 @@ fn tool_names_are_pascalcased_deterministically_and_bijectively() {
     }
 
     // renamed names are unique (bijective)
-    let renamed: Vec<&String> = mapped1.iter().filter(|n| *n != "web_search").collect();
+    let renamed: Vec<&String> = mapped1
+        .iter()
+        .filter(|n| !swapped.contains(&n.as_str()))
+        .collect();
     let uniq: std::collections::BTreeSet<_> = renamed.iter().collect();
     assert_eq!(uniq.len(), renamed.len(), "renamed names must be unique");
 }

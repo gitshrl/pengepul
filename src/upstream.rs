@@ -43,6 +43,7 @@ pub fn build_beta_header(model: &str, structured: bool) -> String {
         "redact-thinking-2026-02-12",
         "context-management-2025-06-27",
         "prompt-caching-scope-2026-01-05",
+        "web-fetch-2025-09-10",
     ];
     let extra = if structured {
         vec!["structured-outputs-2025-12-15"]

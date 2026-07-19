@@ -94,16 +94,22 @@ fn pseudo_for(name: &str, taken: &BTreeSet<String>) -> String {
         .unwrap_or(base)
 }
 
-/// openclaw ships its own custom `web_search` tool that it executes itself. Swap
-/// it for Anthropic's native server tool so the upstream runs the search and folds
-/// the results into the turn; the name stays `web_search` (no client dispatch), so
-/// it is excluded from the `PascalCase` map. Returns the native tool definition, or
-/// `None` for tools with no native equivalent.
+/// openclaw ships its own custom `web_search`/`web_fetch` tools that it executes
+/// itself. Swap them for Anthropic's native server tools so the upstream runs them
+/// and folds the results into the turn; the name is kept (no client dispatch), so
+/// these are excluded from the `PascalCase` map. `web_fetch` also needs the
+/// `web-fetch-2025-09-10` beta on the request (see `build_beta_header`). Returns the
+/// native tool definition, or `None` for tools with no native equivalent.
 fn native_replacement(name: &str) -> Option<Value> {
     match name {
         "web_search" => Some(serde_json::json!({
             "type": "web_search_20250305",
             "name": "web_search",
+            "max_uses": 5,
+        })),
+        "web_fetch" => Some(serde_json::json!({
+            "type": "web_fetch_20250910",
+            "name": "web_fetch",
             "max_uses": 5,
         })),
         _ => None,
