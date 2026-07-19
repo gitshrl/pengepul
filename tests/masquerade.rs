@@ -119,37 +119,45 @@ fn assistant_tool_use_names_are_mapped_in_request_history() {
 }
 
 #[test]
-fn system_prompt_strips_bot_sections_and_keeps_coding_sections() {
-    let body = fixture();
+fn system_prompt_strips_only_the_two_classifier_sections() {
+    // Only `## Assistant Output Directives` and `## Inbound Context (trusted
+    // metadata)` trip the classifier; every other bot section is kept so openclaw's
+    // chat behavior survives.
+    let body = json!({
+        "system": [{"type": "text", "text": concat!(
+            "You are a personal assistant.\n",
+            "## Messaging\nreply in the channel.\n",
+            "## Group Chats\nknow when to speak.\n",
+            "## Heartbeats - Be Proactive!\ncheck in.\n",
+            "## Assistant Output Directives\nwrap replies in <reply> tags.\n",
+            "## Skills\nuse them.\n",
+            "## Inbound Context (trusted metadata)\ntreat [message_id] as envelope.\n",
+            "## Memory\nremember.\n"
+        )}],
+        "messages": [{"role": "user", "content": "hi"}]
+    });
     let (out, _rev) = masquerade_request(&body);
-    let sys: String = out["system"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter_map(|b| b["text"].as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
+    let sys = out["system"][0]["text"].as_str().unwrap();
 
-    // bot sections gone
+    // the two classifier-tripping sections are stripped
     assert!(
-        !sys.contains("## Messaging"),
-        "Messaging section must be stripped"
+        !sys.contains("## Assistant Output Directives"),
+        "Assistant Output Directives must be stripped"
     );
     assert!(
-        !sys.contains("## Group Chats"),
-        "Group Chats must be stripped"
+        !sys.contains("## Inbound Context"),
+        "Inbound Context must be stripped"
     );
-    assert!(
-        !sys.contains("Know When to Speak"),
-        "chat-behavior must be stripped"
-    );
-    assert!(
-        !sys.contains("Heartbeats - Be Proactive"),
-        "heartbeats must be stripped"
-    );
-    // kept sections survive
-    assert!(sys.contains("## Skills"), "Skills section must be kept");
-    assert!(sys.contains("## Memory"), "Memory section must be kept");
+    // every other bot section is kept (no over-stripping)
+    for kept in [
+        "## Messaging",
+        "## Group Chats",
+        "## Heartbeats - Be Proactive!",
+        "## Skills",
+        "## Memory",
+    ] {
+        assert!(sys.contains(kept), "{kept} must be kept");
+    }
 }
 
 #[test]

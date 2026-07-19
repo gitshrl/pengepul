@@ -19,27 +19,20 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
 
-/// Case-insensitive keywords that mark a system-prompt heading as chat-bot
-/// identity. Matched against the heading text (not the body) so wording/emoji
-/// variants across openclaw versions still hit; a matched heading of level L
-/// removes everything up to the next heading of level <= L, so sub-sections are
-/// swallowed with their parent.
+/// Case-insensitive keywords marking the two system-prompt sections that trip the
+/// classifier: `## Assistant Output Directives` (reply/output delivery syntax) and
+/// `## Inbound Context (trusted metadata)` (message-envelope framing). Bisected
+/// against the live classifier — these two are the only sections that 400; every
+/// other bot-identity section (Messaging, Heartbeats, Group Chats, Reply Tags,
+/// Reactions, senders) passes and is deliberately kept so openclaw's chat behavior
+/// survives. Matched against heading text (not body) so wording/emoji variants still
+/// hit; a matched heading of level L removes everything up to the next heading of
+/// level <= L, so sub-sections go with their parent.
 const BOT_SECTION_KEYWORDS: &[&str] = &[
-    "messaging",
-    "message tool",
-    "heartbeat",
-    "group chat",
-    "reply tag",
-    "silent repl",
-    "know when to speak",
-    "react like a human",
-    "reactions",
-    "authorized senders",
-    "allowlisted senders",
-    "inbound context",
-    "trusted metadata",
     "assistant output",
     "output directives",
+    "inbound context",
+    "trusted metadata",
 ];
 
 fn is_bot_heading(line: &str) -> bool {
