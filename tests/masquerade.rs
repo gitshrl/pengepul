@@ -217,29 +217,52 @@ fn snake_case_tool_refs_in_prose_are_renamed_but_words_are_not_clobbered() {
     let body = json!({
         "tools": [
             {"name": "session_search", "description": "d", "input_schema": {}},
-            {"name": "process", "description": "d", "input_schema": {}}
+            {"name": "process", "description": "d", "input_schema": {}},
+            {"name": "web_search", "description": "d", "input_schema": {}}
         ],
         "system": [{"type": "text", "text": concat!(
             "Use session_search to recall past context.\n",
+            "Do not confuse session_searches with the tool.\n",
+            "The presession_search hook is unrelated.\n",
+            "Use web_search to look things up.\n",
             "The review process is important and you must process input carefully.\n",
             "- session_search: search transcripts\n",
-            "- process: manage processes\n"
+            "- process: manage processes\n",
+            "- web_search: search the web\n"
         )}],
         "messages": [{"role": "user", "content": "hi"}]
     });
     let (out, _rev) = masquerade_request(&body);
     let sys = out["system"][0]["text"].as_str().unwrap();
 
-    // multi-word tool ref renamed in prose
+    // multi-word tool ref renamed in prose AND in the listing
     assert!(
         sys.contains("Use SessionSearch to recall"),
         "session_search → SessionSearch in prose"
     );
     assert!(
-        !sys.contains("session_search"),
-        "no snake_case tool ref survives"
+        !sys.contains("- session_search:"),
+        "session_search listing ref renamed"
     );
-    // single-word English usage untouched
+    // whole-word only: a longer identifier that merely contains the tool name as a
+    // substring must survive (this is the reason replace_word exists over str::replace)
+    assert!(
+        sys.contains("session_searches"),
+        "trailing-boundary substring untouched"
+    );
+    assert!(
+        sys.contains("presession_search"),
+        "leading-boundary substring untouched"
+    );
+    // native-swapped tools (web_search/web_fetch) are excluded from the map, so their
+    // snake_case prose stays put and is never PascalCased
+    assert!(
+        sys.contains("Use web_search to look"),
+        "native tool not renamed in prose"
+    );
+    assert!(!sys.contains("WebSearch"), "native tool never PascalCased");
+    // single-word names: listing renamed, English prose untouched
+    assert!(sys.contains("- Process:"), "single-word listing renamed");
     assert!(
         sys.contains("review process is important"),
         "English 'process' not clobbered"
