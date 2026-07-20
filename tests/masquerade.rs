@@ -210,6 +210,91 @@ fn system_prompt_strips_only_the_two_classifier_sections() {
 }
 
 #[test]
+fn generated_heartbeats_strips_but_workspace_heartbeats_survives() {
+    // openclaw 2026.3.x generates `## Heartbeats` (the HEARTBEAT_OK ack protocol),
+    // which trips the classifier. It is a strict prefix of the operator's own
+    // `## Heartbeats (if configured)`, which passes — so the split between them is
+    // exact-heading matching, and nothing weaker can express it.
+    let body = json!({
+        "system": [{"type": "text", "text": concat!(
+            "## Heartbeats\nreply exactly HEARTBEAT_OK when idle.\n",
+            "## Runtime\nruntime notes.\n",
+            "## Heartbeats (if configured)\notherwise reply HB_ACK.\n",
+            "## Make It Yours\nedit freely.\n"
+        )}],
+        "messages": [{"role": "user", "content": "hi"}]
+    });
+    let (out, _rev) = masquerade_request(&body);
+    let sys = out["system"][0]["text"].as_str().unwrap();
+
+    assert!(
+        !sys.contains("HEARTBEAT_OK"),
+        "generated Heartbeats section must be stripped"
+    );
+    for kept in [
+        "## Runtime",
+        "## Heartbeats (if configured)",
+        "HB_ACK",
+        "## Make It Yours",
+    ] {
+        assert!(sys.contains(kept), "{kept} must be kept");
+    }
+}
+
+#[test]
+fn heartbeat_md_comment_headings_never_arm_a_skip() {
+    // An injected HEARTBEAT.md writes its comments as `#` lines, which parse as
+    // level-1 headings. Arming a skip on one would run to the end of the block and
+    // swallow every section after it, so nothing here may match.
+    let body = json!({
+        "system": [{"type": "text", "text": concat!(
+            "## /home/me/.openclaw/workspace/HEARTBEAT.md\n",
+            "# Heartbeats\n",
+            "# Keep this file empty to skip heartbeat API calls.\n",
+            "# Add tasks below to check periodically.\n",
+            "## Messaging\nreply in the channel.\n",
+            "## Runtime\nruntime notes.\n"
+        )}],
+        "messages": [{"role": "user", "content": "hi"}]
+    });
+    let (out, _rev) = masquerade_request(&body);
+    let sys = out["system"][0]["text"].as_str().unwrap();
+
+    for kept in [
+        "## /home/me/.openclaw/workspace/HEARTBEAT.md",
+        "# Heartbeats",
+        "# Keep this file empty to skip heartbeat API calls.",
+        "# Add tasks below to check periodically.",
+        "## Messaging",
+        "## Runtime",
+    ] {
+        assert!(sys.contains(kept), "{kept} must be kept");
+    }
+}
+
+#[test]
+fn reply_tags_section_is_stripped_by_keyword() {
+    // `## Reply Tags` carries openclaw 2026.3.x's [[reply_to_current]] protocol and
+    // trips the classifier. It collides with nothing, so it stays keyword-tier and
+    // keeps tolerating reworded variants.
+    let body = json!({
+        "system": [{"type": "text", "text": concat!(
+            "## Reply Tags\nprefix with [[reply_to_current]].\n",
+            "## Messaging\nreply in the channel.\n"
+        )}],
+        "messages": [{"role": "user", "content": "hi"}]
+    });
+    let (out, _rev) = masquerade_request(&body);
+    let sys = out["system"][0]["text"].as_str().unwrap();
+
+    assert!(
+        !sys.contains("[[reply_to_current]]"),
+        "Reply Tags section must be stripped"
+    );
+    assert!(sys.contains("## Messaging"), "## Messaging must be kept");
+}
+
+#[test]
 fn snake_case_tool_refs_in_prose_are_renamed_but_words_are_not_clobbered() {
     // The classifier flags snake_case tool names in the prompt prose, not just the
     // tool array. Multi-word names are renamed wherever they appear; single-word

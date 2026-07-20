@@ -19,25 +19,36 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
 
-/// Case-insensitive keywords marking the two system-prompt sections that trip the
-/// classifier: `## Assistant Output Directives` (reply/output delivery syntax) and
-/// `## Inbound Context (trusted metadata)` (message-envelope framing). Bisected
-/// against the live classifier — these two are the only sections that 400; every
-/// other bot-identity section (Messaging, Heartbeats, Group Chats, Reply Tags,
-/// Reactions, senders) passes and is deliberately kept so openclaw's chat behavior
-/// survives. Matched against heading text (not body) so wording/emoji variants still
-/// hit; a matched heading of level L removes everything up to the next heading of
-/// level <= L, so sub-sections go with their parent.
+/// Case-insensitive keywords marking the system-prompt sections that trip the
+/// classifier: `## Assistant Output Directives` and `## Inbound Context (trusted
+/// metadata)` on openclaw 2026.7.x, `## Reply Tags` on 2026.3.x — reply/output
+/// delivery syntax and message-envelope framing. Bisected against the live
+/// classifier; every other bot-identity section (Messaging, Group Chats, Reactions,
+/// senders) passes and is deliberately kept so openclaw's chat behavior survives.
+/// Matched against heading text (not body) so wording/emoji variants still hit; a
+/// matched heading of level L removes everything up to the next heading of level
+/// <= L, so sub-sections go with their parent.
 const BOT_SECTION_KEYWORDS: &[&str] = &[
     "assistant output",
     "output directives",
     "inbound context",
     "trusted metadata",
+    "reply tag",
 ];
+
+/// Whole headings that trip the classifier but that no keyword can isolate. openclaw
+/// 2026.3.x generates `## Heartbeats` (the `HEARTBEAT_OK` ack protocol), a strict
+/// prefix of the operator's own `## Heartbeats (if configured)` in AGENTS.md, which
+/// passes and has to survive — and no substring separates a prefix from its
+/// extension. Entries carry their own `## ` because an injected workspace file writes
+/// its comments as `#` lines, which parse as level-1 headings, and a level-1 skip
+/// would run to the end of the block.
+const BOT_SECTION_HEADINGS: &[&str] = &["## heartbeats"];
 
 fn is_bot_heading(line: &str) -> bool {
     let lower = line.to_lowercase();
     BOT_SECTION_KEYWORDS.iter().any(|kw| lower.contains(kw))
+        || BOT_SECTION_HEADINGS.contains(&lower.trim_end())
 }
 
 fn heading_level(line: &str) -> Option<usize> {
