@@ -4,7 +4,7 @@ const ANTHROPIC_WEB_SEARCH_TOOL_TYPE: &str = "web_search_20250305";
 const ANTHROPIC_WEB_SEARCH_TOOL_TYPES: [&str; 1] = [ANTHROPIC_WEB_SEARCH_TOOL_TYPE];
 
 pub const MODEL_ALIASES: [(&str, &str); 3] = [
-    ("opus", "claude-opus-4-8"),
+    ("opus", "claude-opus-5"),
     ("sonnet", "claude-sonnet-4-6"),
     ("haiku", "claude-haiku-4-5-20251001"),
 ];

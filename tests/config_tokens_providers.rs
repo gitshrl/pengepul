@@ -271,7 +271,7 @@ fn registry_routes_anthropic_codex_and_opencode() {
 #[test]
 fn resolve_model_aliases() {
     assert_eq!(resolve_model(None), "claude-sonnet-4-6");
-    assert_eq!(resolve_model(Some("opus")), "claude-opus-4-8");
+    assert_eq!(resolve_model(Some("opus")), "claude-opus-5");
     assert_eq!(resolve_model(Some("sonnet")), "claude-sonnet-4-6");
     assert_eq!(resolve_model(Some("haiku")), "claude-haiku-4-5-20251001");
     assert_eq!(resolve_model(Some("gpt-5.4")), "gpt-5.4");
