@@ -517,6 +517,7 @@ async fn models(State(state): State<AppState>, headers: HeaderMap) -> Response {
         (ProviderKind::Anthropic, "claude-sonnet-4-6"),
         (ProviderKind::Anthropic, "claude-sonnet-5"),
         (ProviderKind::Anthropic, "claude-opus-4-8"),
+        (ProviderKind::Anthropic, "claude-opus-5"),
         (ProviderKind::Anthropic, "claude-fable-5"),
         (ProviderKind::Codex, "gpt-5.4"),
     ]
